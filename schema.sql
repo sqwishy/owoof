@@ -23,9 +23,9 @@ create table "attributes"
     ( rowid         integer primary key
     , ident         text    not null
     -- one or many;
-    , cardinality   integer not null default 0
+    -- , cardinality   integer not null default 0
     -- either; not unique, unique for entity-attribute, or unique for attribute ...
-    , uniqueness    integer not null default 0
+    -- , uniqueness    integer not null default 0
     );
 
 create unique index "attributes_ident" on "attributes" ("ident");

@@ -45,10 +45,15 @@ pub struct Session<'tx> {
 }
 
 pub type EntityId = i64;
-pub type EntityHandle = i64;
+pub type EntityHandle = uuid::Uuid;
+pub type AttributeId = i64;
 
 impl<'tx> Session<'tx> {
-    fn new_entity(&self) -> rusqlite::Result<EntityId> {
+    pub fn new(tx: &'tx rusqlite::Transaction) -> Self {
+        Session { tx }
+    }
+
+    pub fn new_entity(&self) -> rusqlite::Result<EntityId> {
         let uuid = uuid::Uuid::new_v4();
         self.tx.execute(
             "INSERT INTO entities (uuid) VALUES (?)",
@@ -57,10 +62,20 @@ impl<'tx> Session<'tx> {
         Ok(self.tx.last_insert_rowid())
     }
 
-    fn assert<'s, T>(&self, datom: &Datom<'s, T>) -> rusqlite::Result<()>
+    pub fn new_attribute(&self, ident: &str) -> rusqlite::Result<AttributeId> {
+        self.tx.execute(
+            "INSERT INTO attributes (ident) VALUES (?)",
+            rusqlite::params![ident],
+        )?;
+        Ok(self.tx.last_insert_rowid())
+    }
+
+    pub fn assert<S, T>(&self, datom: &Datom<S, T>) -> rusqlite::Result<()>
     where
+        S: rusqlite::ToSql,
         T: rusqlite::ToSql,
     {
+        // TODO this does nothing if the attribute is missing
         let sql = r#"
                WITH new (e, a, v)
                  AS (SELECT ?, attributes.rowid, ? FROM attributes WHERE ident = ?)
@@ -75,6 +90,28 @@ impl<'tx> Session<'tx> {
         ])?;
         Ok(())
     }
+
+    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<String, T>>>
+    where
+        T: rusqlite::types::FromSql,
+    {
+        let sql = r#"
+            SELECT e, attributes.ident, v
+              FROM datoms
+              JOIN attributes ON datoms.a = attributes.rowid"#;
+        let mut stmt = self.tx.prepare(sql)?;
+        let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
+            let entity = row.get(0)?;
+            let attribute = row.get(1)?;
+            let value: T = row.get(2)?;
+            Ok(Datom {
+                entity,
+                attribute,
+                value,
+            })
+        })?;
+        rows.collect::<_>()
+    }
 }
 
 // pub struct Transaction<'s> {
@@ -88,14 +125,14 @@ impl<'tx> Session<'tx> {
 // }
 
 #[derive(Debug)]
-pub struct Datom<'s, T> {
+pub struct Datom<S, T> {
     entity: EntityId,
-    attribute: &'s str,
+    attribute: S, //&'s str,
     value: T,
 }
 
-impl<'s, T> Datom<'s, T> {
-    pub fn new(entity: EntityId, attribute: &'s str, value: T) -> Self {
+impl<S, T> Datom<S, T> {
+    pub fn new(entity: EntityId, attribute: S, value: T) -> Self {
         Datom {
             entity,
             attribute,
@@ -116,16 +153,20 @@ mod tests {
     //     rating: f32,
     // }
 
-    #[test]
-    fn it_works() -> Result<()> {
-        let mut conn = rusqlite::Connection::open_in_memory()?;
+    pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
+        let conn = rusqlite::Connection::open_in_memory()?;
         // conn.create_scalar_function("uuid_generate_v4", 0, false, move |_| {
         //     Ok(uuid::Uuid::new_v4())
         // })?;
         conn.execute_batch(SCHEMA)?;
+        Ok(conn)
+    }
 
+    #[test]
+    fn it_works() -> Result<()> {
+        let mut conn = test_conn()?;
         let tx = conn.transaction()?;
-        let db = Session { tx: &tx };
+        let db = Session::new(&tx);
 
         let e = db.new_entity()?;
         db.assert(&Datom::new(e, "article/title", "Nice Meme"))?;

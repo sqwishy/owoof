@@ -1,0 +1,33 @@
+[package]
+name = "oof"
+version = "0.1.0"
+authors = ["sqwishy <somebody@froghat.ca>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version =  "1", features = ["derive"] }
+anyhow = "1.0.26"            # Flexible concrete Error type built on std::error::Error
+thiserror = "1.0.9"          # derive(Error)
+rusqlite = { version = "0.21", features = ["uuid", "functions"] }
+
+# serde_json = "1"
+# serde_cbor = "0.10"
+# erased-serde = "0.3"         # Type-erased Serialize and Serializer traits
+
+uuid = { version = "0.8", features = ["serde", "v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# fuck?
+# syn = "1"
+# quote = "1"
+# paste = "0.1"          # Macros for all your token pasting needs
+
+# nom = "5"                # A byte-oriented, zero-copy, parser combinators library
+
+lazy_static = "1"
+regex = "1"
+
+# for some mutex thing?
+# parking_lot = "0.9"

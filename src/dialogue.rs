@@ -1,6 +1,8 @@
 //! what are you doing here?
 
-use crate::EntityHandle;
+use std::fmt;
+
+use crate::{AttributeHandle, EntityHandle};
 
 #[derive(Debug)]
 pub enum Face<'a> {
@@ -13,35 +15,48 @@ pub struct Shape<'a> {
 }
 
 #[derive(Debug)]
-pub struct Where<'a> {
-    terms: Vec<Pattern<'a, Box<dyn std::any::Any>>>,
+pub struct Where<'a, V> {
+    terms: Vec<Pattern<'a, V>>,
 }
 
-impl<'a> Where<'a> {
-    fn compile() {
-        /// with "s" as (select e from datoms where a = ? AND v = ?),
-        ///      "s" as (select e, a, v from datoms where a = ? AND v = ?)
-        todo!()
-    }
-}
-
-/// a datom with ? bindings
-/// [parameter|entity, attribute, parameter|value]
+/// An entity-attribute-value tuple, with the possibility of variables for each element.
+/// The values for entity and attribute are public handles, a uuid and string
+/// respectively, rather than the private/internal database ids.
+/// (var|entity, var|attribute, var|value)
 #[derive(Debug)]
-pub struct Pattern<'a, T> {
-    entity: VariableOr<'a, EntityHandle>,
-    attribute: VariableOr<'a, &'a str>,
-    value: VariableOr<'a, T>,
+pub struct Pattern<'a, V> {
+    // todo, less borrowy?
+    pub entity: VariableOr<'a, &'a EntityHandle>,
+    pub attribute: VariableOr<'a, &'a AttributeHandle>,
+    pub value: VariableOr<'a, V>,
 }
-
-// impl<'a, T> Pattern<'a, T> {
-// }
 
 #[derive(Debug)]
 pub enum VariableOr<'a, T> {
     Variable(&'a str),
     Value(T),
 }
+
+impl<'a, V> Where<'a, V> where V: fmt::Debug {}
+
+// #[derive(Debug)]
+// pub struct Shaped<'a, V> {
+//     where_: Where<'a, V>,
+// }
+
+// impl<'a, T> fmt::Display for Pattern<'a, T>
+// where T: fmt::Display
+// {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         let e = self.entity;
+//         let a = self.attribute;
+//         let v = self.value;
+//         write!(f, "({} {} {})", e, a v)
+//     }
+// }
+
+// impl<'a, T> Pattern<'a, T> {
+// }
 
 pub trait Dialogue {
     fn query(&mut self) -> anyhow::Result<()>;
@@ -53,6 +68,10 @@ mod tests {
     use super::*;
     use anyhow::Result;
 
+    /// where [(s :person/name "Spongebob"),
+    ///        (s :person/pants p),
+    ///        (p :object/geometry g)]
+    /// shape g
     #[test]
     fn can_query() -> Result<()> {
         use crate::{tests::test_conn, Datom, Session};
@@ -76,41 +95,184 @@ mod tests {
 
         let wow: Vec<String> = {
             let sql = r#"
-            with "_s" as (select e from datoms where a = ? AND v = ?)
-               , "_p" as (select v from datoms where e in "_s" AND a = ?)
-               , "_g" as (select v from datoms where e in "_p" AND a = ?)
-          select "v" from "_g";
+            select "_p_g"."v"
+              from datoms "_s"
+                 , datoms "_s_p"
+                 , datoms "_p_g"
+
+                -- s :person/name "Spongebob"
+              where "_s".a = ?
+                and "_s".v = ?
+
+                -- s :person/pants p
+                and "_s_p".e = "_s".e
+                and "_s_p".a = ?
+
+                -- p :object/geometry g
+                and "_p_g".e = "_s_p".v
+                and "_p_g".a = ?
             "#;
-            let p = rusqlite::params![
-                // "person/name",
-                person_name,
-                "Spongebob",
-                // "person/pants",
-                person_pants,
-                // "object/geometry"
-                object_geometry,
-            ];
+            let p = rusqlite::params![person_name, "Spongebob", person_pants, object_geometry,];
 
             let mut stmt = tx.prepare(sql)?;
-            let wat = stmt.query_map(p, |row| row.get(0))?;
-            wat.collect::<rusqlite::Result<Vec<String>>>()?
+            let rows = stmt.query_map(p, |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()?
         };
 
-        eprintln!("wow {:?}", wow);
         assert_eq!(wow, vec!["square"]);
 
         Ok(())
     }
 
+    /// ?p person/name ?n
+    /// ?p person/favorite_color "blue"
+    /// |> ?n
+    #[test]
+    fn simple_joining() -> Result<()> {
+        use crate::{tests::test_conn, Datom, Session};
+
+        let mut conn = test_conn()?;
+        let tx = conn.transaction()?;
+        let db = Session::new(&tx);
+
+        let person_name = db.new_attribute("person/name")?;
+        let favorite_color = db.new_attribute("person/favorite_color")?;
+
+        let alice = db.new_entity()?;
+        let bob = db.new_entity()?;
+        let carol = db.new_entity()?;
+
+        db.assert(&Datom::new(alice, "person/name", "Alice"))?;
+        db.assert(&Datom::new(bob, "person/name", "Bob"))?;
+        db.assert(&Datom::new(carol, "person/name", "Carol"))?;
+
+        db.assert(&Datom::new(alice, "person/favorite_color", "blue"))?;
+        db.assert(&Datom::new(bob, "person/favorite_color", "red"))?;
+        db.assert(&Datom::new(carol, "person/favorite_color", "blue"))?;
+
+        let blue_names: Vec<String> = {
+            let sql = r#"
+            select "_p_n"."v"
+              from datoms "_p_n"
+                 , datoms "_p_blue"
+             where "_p_n"."e" = "_p_blue"."e"
+               and "_p_n"."a" = ?
+               and "_p_blue"."a" = ?
+               and "_p_blue"."v" = ?
+            "#;
+
+            let p = rusqlite::params![person_name, favorite_color, "blue"];
+            let mut stmt = tx.prepare(sql)?;
+            let rows = stmt.query_map(p, |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+
+        assert_eq!(
+            blue_names.into_iter().map(|name| name).collect::<Vec<_>>(),
+            vec!["Alice", "Carol"]
+        );
+
+        Ok(())
+    }
+
+    /// where [(?r review/book ?b),
+    ///        (?r review/comment ?c),
+    ///        (?r review/author ?a),
+    /// TODO   (?b book/author ?a),
+    ///        (?a person/name ?n)]
+    /// ?n ?c
+    ///
+    /// b -> a -> n
+    /// ^    ^
+    /// +--- r -> c
+    #[test]
+    fn book_review() -> Result<()> {
+        use crate::{tests::test_conn, Datom, Session};
+
+        let mut conn = test_conn()?;
+        let tx = conn.transaction()?;
+        let db = Session::new(&tx);
+
+        let book_author = db.new_attribute("book/author")?;
+        let person_name = db.new_attribute("person/name")?;
+        let review_book = db.new_attribute("review/book")?;
+        let review_author = db.new_attribute("review/author")?;
+        let review_comment = db.new_attribute("review/comment")?;
+
+        let book = db.new_entity()?;
+        let alice = db.new_entity()?;
+        let bob = db.new_entity()?;
+
+        db.assert(&Datom::new(alice, "person/name", "Alice"))?;
+        db.assert(&Datom::new(bob, "person/name", "Bob"))?;
+
+        db.assert(&Datom::new(book, "book/author", bob))?;
+
+        let alice_review = db.new_entity()?;
+        db.assert(&Datom::new(alice_review, "review/book", book))?;
+        db.assert(&Datom::new(alice_review, "review/author", alice))?;
+        db.assert(&Datom::new(alice_review, "review/comment", "Terrible"))?;
+
+        let bob_review = db.new_entity()?;
+        db.assert(&Datom::new(bob_review, "review/book", book))?;
+        db.assert(&Datom::new(bob_review, "review/author", bob))?;
+        db.assert(&Datom::new(bob_review, "review/comment", "My book!"))?;
+
+        let wat: Vec<(String, String)> = {
+            let sql = r#"
+          select "_a_n".v, "_r_c".v
+            from datoms "_r_b"
+               , datoms "_r_c"
+               , datoms "_r_a"
+            -- , datoms "_b_a"
+               , datoms "_a_n"
+
+                 -- (?r review/book ?b)
+           where "_r_b".a = ?
+                 -- (?r review/comment ?c)
+             and "_r_c".a = ?
+             and "_r_c".e = "_r_b".e
+                 -- (?r review/author ?a)
+             and "_r_a".a = ?
+             and "_r_a".e = "_r_b".e
+                 -- (?a person/name ?n)
+             and "_a_n".a = ?
+             and "_a_n".e = "_r_a".v
+
+        order by "_a_n".v ASC
+            "#;
+
+            let p = rusqlite::params![review_book, review_comment, review_author, person_name];
+
+            let mut stmt = tx.prepare(sql)?;
+            let rows = stmt.query_map(p, |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+
+        eprintln!("{:#?}", wat);
+        assert_eq!(
+            wat,
+            vec![
+                ("Alice".to_owned(), "Terrible".to_owned()),
+                ("Bob".to_owned(), "My book!".to_owned())
+            ]
+        );
+
+        Ok(())
+    }
+
+    /// where [(?s :person/name "Spongebob"),
+    ///        (?s :person/pants ?p),
+    ///        (?p :object/geometry ?g)]
+    /// shape ?p
     #[test]
     fn it_works() -> Result<()> {
-        //! where (?p :person/name "Spongebob")
         let w = Where {
             terms: vec![
                 Pattern {
                     entity: Variable("s"),
                     attribute: Value("person/name"),
-                    value: Value(Box::new("Spongebob")),
+                    value: Value("Spongebob"),
                 },
                 Pattern {
                     entity: Variable("s"),
@@ -126,13 +288,19 @@ mod tests {
             ],
         };
 
-        // w.compile();
+        let mut g = crate::matter::Glyph::default();
 
-        // let f = Shape {
-        //     faces: vec![
-        //         Face::Attribute("")
-        //     ],
-        // }
+        for term in w.terms.iter() {
+            g.add_pattern(term);
+        }
+
+        eprintln!("{:#?}", g);
+
+        // Wait ... this can't quite be done just quite yet because we haven't validated
+        // the attributes or normalized them from their references?
+        let mut sql = crate::sql::GenericQuery::default();
+        crate::sql::glyph_sql(&g, &mut sql).unwrap();
+        eprintln!("sql:\n{}", sql);
 
         Ok(())
     }

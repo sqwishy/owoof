@@ -33,12 +33,12 @@
 // ^^^ todo; get your shit together ^^^
 
 mod dialogue;
+mod matter;
+mod sql;
 
 use std::collections::HashMap;
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
-
-pub mod time;
 
 pub struct Session<'tx> {
     tx: &'tx rusqlite::Transaction<'tx>,
@@ -47,6 +47,7 @@ pub struct Session<'tx> {
 pub type EntityId = i64;
 pub type EntityHandle = uuid::Uuid;
 pub type AttributeId = i64;
+pub type AttributeHandle = str;
 
 impl<'tx> Session<'tx> {
     pub fn new(tx: &'tx rusqlite::Transaction) -> Self {
@@ -55,18 +56,20 @@ impl<'tx> Session<'tx> {
 
     pub fn new_entity(&self) -> rusqlite::Result<EntityId> {
         let uuid = uuid::Uuid::new_v4();
-        self.tx.execute(
+        let n = self.tx.execute(
             "INSERT INTO entities (uuid) VALUES (?)",
             rusqlite::params![uuid],
         )?;
+        assert_eq!(n, 1);
         Ok(self.tx.last_insert_rowid())
     }
 
     pub fn new_attribute(&self, ident: &str) -> rusqlite::Result<AttributeId> {
-        self.tx.execute(
+        let n = self.tx.execute(
             "INSERT INTO attributes (ident) VALUES (?)",
             rusqlite::params![ident],
         )?;
+        assert_eq!(n, 1);
         Ok(self.tx.last_insert_rowid())
     }
 
@@ -91,7 +94,7 @@ impl<'tx> Session<'tx> {
         Ok(())
     }
 
-    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<String, T>>>
+    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<OwnedDatom<T>>>
     where
         T: rusqlite::types::FromSql,
     {
@@ -127,9 +130,12 @@ impl<'tx> Session<'tx> {
 #[derive(Debug)]
 pub struct Datom<S, T> {
     entity: EntityId,
+    // TODO, the attribute should probably be an attribute(/entity) id or something
     attribute: S, //&'s str,
     value: T,
 }
+
+pub type OwnedDatom<T> = Datom<String, T>;
 
 impl<S, T> Datom<S, T> {
     pub fn new(entity: EntityId, attribute: S, value: T) -> Self {

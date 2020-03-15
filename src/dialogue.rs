@@ -4,15 +4,15 @@ use std::fmt;
 
 use crate::{AttributeHandle, EntityHandle};
 
-#[derive(Debug)]
-pub enum Face<'a> {
-    Attribute(&'a str),
-}
-
-#[derive(Debug)]
-pub struct Shape<'a> {
-    faces: Vec<Face<'a>>,
-}
+// #[derive(Debug)]
+// pub enum Face<'a> {
+//     Attribute(&'a str),
+// }
+//
+// #[derive(Debug)]
+// pub struct Shape<'a> {
+//     faces: Vec<Face<'a>>,
+// }
 
 #[derive(Debug)]
 pub struct Where<'a, V> {
@@ -37,7 +37,12 @@ pub enum VariableOr<'a, T> {
     Value(T),
 }
 
-impl<'a, V> Where<'a, V> where V: fmt::Debug {}
+// #[derive(Debug)]
+// pub struct Shape<'a, V> {
+//     // wh: Where<'a, V>,
+// }
+
+// impl<'a, V> Where<'a, V> where V: fmt::Debug {}
 
 // #[derive(Debug)]
 // pub struct Shaped<'a, V> {
@@ -58,15 +63,32 @@ impl<'a, V> Where<'a, V> where V: fmt::Debug {}
 // impl<'a, T> Pattern<'a, T> {
 // }
 
-pub trait Dialogue {
-    fn query(&mut self) -> anyhow::Result<()>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::VariableOr::*;
     use super::*;
     use anyhow::Result;
+
+    fn bikini_bottom() -> rusqlite::Result<rusqlite::Connection> {
+        use crate::{tests::test_conn, Datom, Session};
+
+        let mut conn = test_conn()?;
+        let tx = conn.transaction()?;
+        let db = Session::new(&tx);
+
+        let person_name = db.new_attribute("person/name")?;
+        let person_pants = db.new_attribute("person/pants")?;
+        let object_geometry = db.new_attribute("object/geometry")?;
+
+        let spongebob = db.new_entity()?;
+        let pants = db.new_entity()?;
+        db.assert(&Datom::new(spongebob, "person/name", "Spongebob"))?;
+        db.assert(&Datom::new(spongebob, "person/pants", pants))?;
+        db.assert(&Datom::new(pants, "object/geometry", "square"))?;
+
+        tx.commit()?;
+        Ok(conn)
+    }
 
     /// where [(s :person/name "Spongebob"),
     ///        (s :person/pants p),
@@ -261,12 +283,16 @@ mod tests {
         Ok(())
     }
 
+    /// What is the geometrical shape of spongebob's pants?
+    ///
     /// where [(?s :person/name "Spongebob"),
     ///        (?s :person/pants ?p),
     ///        (?p :object/geometry ?g)]
-    /// shape ?p
+    /// shape ?g
     #[test]
     fn it_works() -> Result<()> {
+        use crate::{matter::Glyph, sql};
+
         let w = Where {
             terms: vec![
                 Pattern {
@@ -296,11 +322,19 @@ mod tests {
 
         eprintln!("{:#?}", g);
 
-        // Wait ... this can't quite be done just quite yet because we haven't validated
-        // the attributes or normalized them from their references?
-        let mut sql = crate::sql::GenericQuery::default();
-        crate::sql::glyph_sql(&g, &mut sql).unwrap();
-        eprintln!("sql:\n{}", sql);
+        let mut query = sql::GenericQuery::from("select ");
+        sql::location_sql(g.variables().get("g").unwrap(), &mut query)?;
+        query.push_str("\n");
+
+        sql::glyph_sql(&g, &mut query).unwrap();
+        eprintln!("query:\n{}", query);
+
+        let mut conn = bikini_bottom()?;
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare(query.as_str())?;
+        let rows = stmt.query_map(query.params(), |row| row.get(0))?;
+        let pants = rows.collect::<rusqlite::Result<Vec<String>>>()?;
+        assert_eq!(pants, vec!["square"]);
 
         Ok(())
     }

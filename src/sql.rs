@@ -42,6 +42,32 @@ impl<T> DerefMut for GenericQuery<T> {
     }
 }
 
+// todo; implement From for all ToString?
+
+impl<T> From<String> for GenericQuery<T> {
+    fn from(string: String) -> Self {
+        GenericQuery {
+            string,
+            ..GenericQuery::default()
+        }
+    }
+}
+
+impl<'a, T> From<&'a str> for GenericQuery<T> {
+    fn from(s: &'a str) -> Self {
+        GenericQuery {
+            string: s.to_string(),
+            ..GenericQuery::default()
+        }
+    }
+}
+
+impl GenericQuery<&dyn ToSql> {
+    pub fn params(&self) -> &[&dyn ToSql] {
+        self.params.as_slice()
+    }
+}
+
 impl<T> GenericQuery<T> {
     // pub fn aliased_datomset(&mut self, n: DatomSet) -> fmt::Result {
     //     write!(self, "_d{}\n", n.0)
@@ -67,19 +93,19 @@ where
 
     for n in 0usize..glyph.datomsets() {
         if n == 0 {
-            query.push_str("  select datoms ")
+            query.push_str("from datoms ")
         } else {
-            query.push_str("       , datoms ")
+            query.push_str("   , datoms ")
         }
         // write the alias
-        write!(query, "_datoms{}\n", n).unwrap();
+        write!(query, "_dtm{}\n", n).unwrap();
     }
 
     for (n, constraint) in glyph.constraints().iter().enumerate() {
         if n == 0 {
-            query.push_str("   where ")
+            query.push_str("where ")
         } else {
-            query.push_str("     and ")
+            query.push_str("  and ")
         }
 
         let Constraint(on, to) = constraint;
@@ -92,7 +118,7 @@ where
             matter::Value::Attribute(handle) => {
                 location_sql(on, &mut query)?;
                 query.push_str(" in ");
-                query.push_str("(select id from attributes where ident = ?)");
+                query.push_str("(select a.rowid from attributes a where a.ident = ?)");
                 query.add_param(handle as &dyn ToSql);
             }
             matter::Value::EqValue(v) => {
@@ -109,13 +135,13 @@ where
     Ok(())
 }
 
-fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt::Result {
+pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt::Result {
     let column = match l.field {
         matter::Field::Entity => "e",
         matter::Field::Attribute => "a",
         matter::Field::Value => "v",
     };
-    write!(query, "_datoms{}.{}", l.datomset.0, column)
+    write!(query, "_dtm{}.{}", l.datomset.0, column)
 }
 
 // fn datomset_alias(d: DatomSet) -> String {

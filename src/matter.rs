@@ -89,6 +89,7 @@ value_from!(&'a AttributeHandle => Attribute);
 #[derive(Default, Debug)]
 pub struct Glyph<'a, V> {
     sets: usize,
+    /// I believe this only contains the _first_ occurrence of some variable
     variables: HashMap<&'a str, Location>,
     constraints: Vec<Constraint<'a, V>>,
 }

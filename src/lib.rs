@@ -1,3 +1,19 @@
+//! How is this organized?
+//!
+//! lib - Session & Datom
+//! dialog - mostly tests; Pattern 3-tuple of ?t/T
+//! matter - Glyph? Borrows patterns into datom sets & constraints
+//! sql - render a SQL query from a glyph
+//!
+//! The names are terrible, iirc there are two interesting ways to view a list
+//! of patterns as a graph.
+//!
+//! 1. bijection between graph vectors and variables
+//! 2. bijection between graph vectors and datom sets/the 3-tuple pattern
+//!
+//! The Glyph sort of models #2.
+//!
+//!-----------------------------------------------------------------------------
 //! DSL:
 //!
 //! Only bad people like avocado.
@@ -17,7 +33,8 @@
 //!
 //! where (?p :person/name "Spongebob")
 //!       (?p :person/pants ?n)
-//! shape ?n (:pants/shape)
+//!       (?p :pants/shape ?s)
+//! shape {?p ?s}
 //!
 //! Show three most recent articles, the authors, and three most recent comments.
 //!
@@ -40,6 +57,7 @@ use std::collections::HashMap;
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
+/// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
 pub struct Session<'tx> {
     tx: &'tx rusqlite::Transaction<'tx>,
 }
@@ -127,6 +145,7 @@ impl<'tx> Session<'tx> {
 //     Retract(Datom<'s, T>),
 // }
 
+/// Super generic type, not used much except I think to represent what we store in sqlite
 #[derive(Debug)]
 pub struct Datom<S, T> {
     entity: EntityId,
@@ -159,7 +178,7 @@ mod tests {
     //     rating: f32,
     // }
 
-    pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
+    pub(crate) fn test_conn() -> rusqlite::Result<rusqlite::Connection> {
         let conn = rusqlite::Connection::open_in_memory()?;
         // conn.create_scalar_function("uuid_generate_v4", 0, false, move |_| {
         //     Ok(uuid::Uuid::new_v4())

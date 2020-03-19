@@ -63,6 +63,30 @@ pub enum VariableOr<'a, T> {
 // impl<'a, T> Pattern<'a, T> {
 // }
 
+#[macro_export]
+macro_rules! pat {
+    (?$e:ident $a:tt ?$v:tt) => {{
+       $crate::dialogue::Pattern {
+            entity: pat!(:var $e),
+            attribute: pat!(:val $a),
+            value: pat!(:var $v),
+        }
+    }};
+    (?$e:ident $a:tt $v:tt) => {{
+       $crate::dialogue::Pattern {
+            entity: pat!(:var $e),
+            attribute: pat!(:val $a),
+            value: pat!(:val $v),
+        }
+    }};
+    (:var $v:ident) => {
+        $crate::dialogue::VariableOr::Variable(stringify!($v))
+    };
+    (:val $v:tt) => {
+        $crate::dialogue::VariableOr::Value($v)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::VariableOr::*;

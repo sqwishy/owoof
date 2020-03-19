@@ -59,6 +59,8 @@ mod sql;
 
 use std::collections::HashMap;
 
+pub use dialogue::Pattern;
+
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
@@ -108,11 +110,12 @@ impl<'tx> Session<'tx> {
              SELECT * FROM new;
         "#;
         let mut stmt = self.tx.prepare(sql)?;
-        stmt.execute(rusqlite::params![
+        let n = stmt.execute(rusqlite::params![
             datom.entity,
             datom.value,
             datom.attribute
         ])?;
+        assert_eq!(n, 1);
         Ok(())
     }
 
@@ -198,6 +201,7 @@ mod tests {
         let db = Session::new(&tx);
 
         let e = db.new_entity()?;
+        db.new_attribute("article/title")?;
         db.assert(&Datom::new(e, "article/title", "Nice Meme"))?;
 
         let anchorman: HashMap<_, _> = {
@@ -221,6 +225,50 @@ mod tests {
             v.push(("film/rating", Box::new(8.0)));
             v.into_iter().collect()
         };
+
+        Ok(())
+    }
+
+    pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
+        let mut db = test_conn()?;
+        let tx = db.transaction()?;
+        let s = Session::new(&tx);
+
+        s.new_attribute("book/title")?;
+        s.new_attribute("book/rating")?;
+        s.new_attribute("book/isbn")?;
+        s.new_attribute("book/authors")?;
+
+        let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
+        for result in r.deserialize().take(500) {
+            let book: Book = result?;
+
+            let e = s.new_entity()?;
+            s.assert(&Datom::new(e, "book/title", book.title))?;
+            s.assert(&Datom::new(e, "book/isbn", book.isbn))?;
+            s.assert(&Datom::new(e, "book/authors", book.authors))?;
+        }
+
+        drop(tx);
+        return Ok(db);
+
+        #[derive(Debug, serde::Deserialize)]
+        struct Book {
+            title: String,
+            isbn: String,
+            authors: String,
+        }
+    }
+
+    #[test]
+    fn wow() -> Result<()> {
+        let mut db = goodbooks()?;
+        let tx = db.transaction()?;
+        let s = Session::new(&tx);
+
+        let p: Pattern<&'static str> = pat!(?b "book/title" ?t);
+
+        // Where { terms: vec![p] }
 
         Ok(())
     }

@@ -2,8 +2,8 @@
 //!
 //! lib - Session & Datom
 //! dialog - mostly tests; Pattern 3-tuple of ?t/T
-//! matter - Glyph? Borrows patterns into datom sets & constraints
-//! sql - render a SQL query from a glyph
+//! matter - Projection? Borrows patterns into datom sets & constraints
+//! sql - render a SQL query for a Projection
 //!
 //! The names are terrible, iirc there are two interesting ways to view a list
 //! of patterns as a graph.
@@ -11,7 +11,7 @@
 //! 1. bijection between graph vectors and variables
 //! 2. bijection between graph vectors and datom sets/the 3-tuple pattern
 //!
-//! The Glyph sort of models #2.
+//! The Projection sort of models #2.
 //!
 //! (?e _ (cast date $))
 //! (?e _ #date $)
@@ -60,6 +60,7 @@ mod sql;
 use std::collections::HashMap;
 
 pub use dialogue::Pattern;
+pub use matter::Projection;
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 

@@ -315,7 +315,7 @@ mod tests {
     /// shape ?g
     #[test]
     fn it_works() -> Result<()> {
-        use crate::{matter::Glyph, sql};
+        use crate::{matter::Projection, sql};
 
         let w = Where {
             terms: vec![
@@ -338,7 +338,7 @@ mod tests {
             ],
         };
 
-        let mut g = crate::matter::Glyph::default();
+        let mut g = crate::matter::Projection::default();
 
         for term in w.terms.iter() {
             g.add_pattern(term);
@@ -350,7 +350,7 @@ mod tests {
         sql::location_sql(g.variables().get("g").unwrap(), &mut query)?;
         query.push_str("\n");
 
-        sql::glyph_sql(&g, &mut query).unwrap();
+        sql::projection_sql(&g, &mut query).unwrap();
         eprintln!("query:\n{}", query);
 
         let mut conn = bikini_bottom()?;

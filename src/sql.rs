@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Constraint, DatomSet, Glyph};
+use crate::matter::{self, Constraint, DatomSet, Projection};
 
 #[derive(Debug)]
 pub struct GenericQuery<T> {
@@ -78,20 +78,20 @@ impl<T> GenericQuery<T> {
     }
 }
 
-/// todo this only supports owned queries, the params can't borrow from Glyph
-pub fn glyph_sql<'g, 'q, V>(
-    glyph: &'g Glyph<V>,
+/// todo this only supports owned queries, the params can't borrow from Projection
+pub fn projection_sql<'g, 'q, V>(
+    projection: &'g Projection<V>,
     query: &'q mut GenericQuery<&'g dyn ToSql>,
 ) -> fmt::Result
 where
     'g: 'q,
     V: Debug + ToSql,
 {
-    assert!(glyph.datomsets() > 0);
+    assert!(projection.datomsets() > 0);
 
     let mut query = query;
 
-    for n in 0usize..glyph.datomsets() {
+    for n in 0usize..projection.datomsets() {
         if n == 0 {
             query.push_str("from datoms ")
         } else {
@@ -101,7 +101,7 @@ where
         write!(query, "_dtm{}\n", n).unwrap();
     }
 
-    for (n, constraint) in glyph.constraints().iter().enumerate() {
+    for (n, constraint) in projection.constraints().iter().enumerate() {
         if n == 0 {
             query.push_str("where ")
         } else {

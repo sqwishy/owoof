@@ -87,14 +87,14 @@ value_from!(&'a AttributeHandle => Attribute);
 ///
 /// This references attributes and entities by their handles/public representations.
 #[derive(Default, Debug)]
-pub struct Glyph<'a, V> {
+pub struct Projection<'a, V> {
     sets: usize,
     /// I believe this only contains the _first_ occurrence of some variable
     variables: HashMap<&'a str, Location>,
     constraints: Vec<Constraint<'a, V>>,
 }
 
-impl<'a, V> Glyph<'a, V>
+impl<'a, V> Projection<'a, V>
 where
     V: Debug,
 {

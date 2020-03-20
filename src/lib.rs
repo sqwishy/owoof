@@ -48,6 +48,12 @@
 //!     {(:article/comments limit 3) :comment/content}
 //!     )
 //!
+//! where ?c :person/dob ?d
+//!       ?p :person/parent ?c
+//!    if ?d > "Jan 1 2020"
+//!  show ?c :person/name
+//!       ?p :person/name
+//!
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
@@ -60,7 +66,7 @@ mod sql;
 use std::collections::HashMap;
 
 pub use dialogue::Pattern;
-pub use matter::Projection;
+pub use matter::{Projection, Selection, Where};
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
@@ -246,11 +252,12 @@ mod tests {
 
             let e = s.new_entity()?;
             s.assert(&Datom::new(e, "book/title", book.title))?;
+            s.assert(&Datom::new(e, "book/rating", book.average_rating))?;
             s.assert(&Datom::new(e, "book/isbn", book.isbn))?;
             s.assert(&Datom::new(e, "book/authors", book.authors))?;
         }
 
-        drop(tx);
+        tx.commit()?;
         return Ok(db);
 
         #[derive(Debug, serde::Deserialize)]
@@ -258,6 +265,7 @@ mod tests {
             title: String,
             isbn: String,
             authors: String,
+            average_rating: f64,
         }
     }
 
@@ -267,9 +275,28 @@ mod tests {
         let tx = db.transaction()?;
         let s = Session::new(&tx);
 
-        let p: Pattern<&'static str> = pat!(?b "book/title" ?t);
+        // eprintln!("all datoms: {:#?}", s.all_datoms::<String>());
 
-        // Where { terms: vec![p] }
+        let wh = Where::<&'static str> {
+            terms: vec![pat!(?b "book/title" ?t), pat!(?b "book/rating" ?r)],
+        };
+        let p = Projection::of(&wh);
+        let s = p.select(["t", "r"].iter().cloned()).unwrap();
+
+        use crate::sql;
+
+        let mut query = sql::GenericQuery::default();
+        sql::selection_sql(&s, &mut query).unwrap();
+        query.push_str("limit 10");
+
+        {
+            eprintln!("query:\n{}", query);
+            let mut stmt = tx.prepare(query.as_str())?;
+            let rows = stmt.query_map(query.params(), |row| Ok((row.get(0)?, row.get(1)?)))?;
+            let pants = rows.collect::<rusqlite::Result<Vec<(String, f64)>>>()?;
+            eprintln!("{:#?}", pants);
+            assert_eq!(pants.len(), 10);
+        }
 
         Ok(())
     }

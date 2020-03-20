@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fmt::Debug};
 
+pub use crate::dialogue::Where;
 use crate::{dialogue, AttributeHandle, EntityHandle};
 
 #[derive(Debug, Clone, Copy)]
@@ -86,7 +87,7 @@ value_from!(&'a AttributeHandle => Attribute);
 /// A collection of datom-sets.  With constraints interlinking them.
 ///
 /// This references attributes and entities by their handles/public representations.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Projection<'a, V> {
     sets: usize,
     /// I believe this only contains the _first_ occurrence of some variable
@@ -94,16 +95,49 @@ pub struct Projection<'a, V> {
     constraints: Vec<Constraint<'a, V>>,
 }
 
+impl<'a, V> Default for Projection<'a, V> {
+    fn default() -> Self {
+        Projection {
+            sets: 0usize,
+            variables: HashMap::new(),
+            constraints: Vec::new(),
+        }
+    }
+}
+
 impl<'a, V> Projection<'a, V>
 where
     V: Debug,
 {
+    pub fn of<'w: 'a>(wh: &'w Where<V>) -> Self {
+        let mut p = Self::default();
+        for term in wh.terms.iter() {
+            p.add_pattern(term);
+        }
+        p
+    }
+
+    pub fn select<'v, I: Iterator<Item = &'v str>>(
+        self,
+        i: I,
+    ) -> Result<Selection<'a, V>, &'v str> {
+        let columns = i
+            .map(|var| self.variables.get(var).cloned().ok_or(var))
+            .collect::<Result<Vec<_>, &str>>()?;
+        Ok(Selection {
+            projection: self,
+            columns,
+        })
+    }
+
     pub fn datomsets(&self) -> usize {
         self.sets
     }
+
     pub fn variables(&self) -> &HashMap<&'a str, Location> {
         &self.variables
     }
+
     pub fn constraints(&self) -> &Vec<Constraint<'a, V>> {
         &self.constraints
     }
@@ -180,4 +214,26 @@ where
             _ => todo!("{:?}", pattern),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct Selection<'a, V> {
+    pub projection: Projection<'a, V>,
+    // private members prevent destructuring ... :(
+    pub columns: Vec<Location>,
+}
+
+impl<'a, V> From<Projection<'a, V>> for Selection<'a, V> {
+    fn from(projection: Projection<'a, V>) -> Self {
+        Selection {
+            projection,
+            columns: vec![],
+        }
+    }
+}
+
+impl<'a, V> Selection<'a, V> {
+    // fn columns(&self) -> &Vec<Location> {
+    //     &self.columns
+    // }
 }

@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Constraint, DatomSet, Projection};
+use crate::matter::{self, Constraint, DatomSet, Projection, Selection};
 
 #[derive(Debug)]
 pub struct GenericQuery<T> {
@@ -78,13 +78,37 @@ impl<T> GenericQuery<T> {
     }
 }
 
-/// todo this only supports owned queries, the params can't borrow from Projection
-pub fn projection_sql<'g, 'q, V>(
-    projection: &'g Projection<V>,
-    query: &'q mut GenericQuery<&'g dyn ToSql>,
+pub fn selection_sql<'q, 'a: 'q, V>(
+    selection: &'a Selection<V>,
+    query: &'q mut GenericQuery<&'a dyn ToSql>,
 ) -> fmt::Result
 where
-    'g: 'q,
+    V: Debug + ToSql,
+{
+    let Selection {
+        columns,
+        projection,
+    } = selection;
+
+    for (n, loc) in columns.iter().enumerate() {
+        if n == 0 {
+            query.push_str("select ")
+        } else {
+            query.push_str("     , ")
+        }
+        location_sql(loc, query)?;
+        query.push_str("\n");
+    }
+
+    projection_sql(projection, query)
+}
+
+/// todo this only supports owned queries, the params can't borrow from Projection
+pub fn projection_sql<'q, 'a: 'q, V>(
+    projection: &'a Projection<V>,
+    query: &'q mut GenericQuery<&'a dyn ToSql>,
+) -> fmt::Result
+where
     V: Debug + ToSql,
 {
     assert!(projection.datomsets() > 0);
@@ -93,9 +117,9 @@ where
 
     for n in 0usize..projection.datomsets() {
         if n == 0 {
-            query.push_str("from datoms ")
+            query.push_str("  from datoms ")
         } else {
-            query.push_str("   , datoms ")
+            query.push_str("     , datoms ")
         }
         // write the alias
         write!(query, "_dtm{}\n", n).unwrap();
@@ -103,9 +127,9 @@ where
 
     for (n, constraint) in projection.constraints().iter().enumerate() {
         if n == 0 {
-            query.push_str("where ")
+            query.push_str(" where ")
         } else {
-            query.push_str("  and ")
+            query.push_str("   and ")
         }
 
         let Constraint(on, to) = constraint;

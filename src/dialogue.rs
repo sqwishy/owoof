@@ -1,22 +1,15 @@
 //! what are you doing here?
+//!
+//! TODO move this into matter? this is projection stuff?
 
 use std::fmt;
 
 use crate::{AttributeHandle, EntityHandle};
 
-// #[derive(Debug)]
-// pub enum Face<'a> {
-//     Attribute(&'a str),
-// }
-//
-// #[derive(Debug)]
-// pub struct Shape<'a> {
-//     faces: Vec<Face<'a>>,
-// }
-
 #[derive(Debug)]
-pub struct Where<'a, V> {
-    terms: Vec<Pattern<'a, V>>,
+pub enum VariableOr<'a, T> {
+    Variable(&'a str),
+    Value(T),
 }
 
 /// An entity-attribute-value tuple, with the possibility of variables for each element.
@@ -31,37 +24,17 @@ pub struct Pattern<'a, V> {
     pub value: VariableOr<'a, V>,
 }
 
-#[derive(Debug)]
-pub enum VariableOr<'a, T> {
-    Variable(&'a str),
-    Value(T),
+#[derive(Debug, PartialEq)]
+pub enum Logic<T> {
+    // Neg(T),
+    Or(T),
+    And(T),
 }
 
-// #[derive(Debug)]
-// pub struct Shape<'a, V> {
-//     // wh: Where<'a, V>,
-// }
-
-// impl<'a, V> Where<'a, V> where V: fmt::Debug {}
-
-// #[derive(Debug)]
-// pub struct Shaped<'a, V> {
-//     where_: Where<'a, V>,
-// }
-
-// impl<'a, T> fmt::Display for Pattern<'a, T>
-// where T: fmt::Display
-// {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         let e = self.entity;
-//         let a = self.attribute;
-//         let v = self.value;
-//         write!(f, "({} {} {})", e, a v)
-//     }
-// }
-
-// impl<'a, T> Pattern<'a, T> {
-// }
+#[derive(Debug)]
+pub struct Where<'a, V> {
+    pub terms: Vec<Pattern<'a, V>>,
+}
 
 #[macro_export]
 macro_rules! pat {

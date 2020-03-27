@@ -103,6 +103,33 @@ where
     projection_sql(projection, query)
 }
 
+pub fn select_datomsets<'q, 'a: 'q, V>(
+    projection: &'a Projection<V>,
+    query: &'q mut GenericQuery<&'a dyn ToSql>,
+) -> fmt::Result
+where
+    V: Debug + ToSql,
+{
+    assert!(projection.datomsets() > 0);
+
+    for n in 0..projection.datomsets() {
+        if n == 0 {
+            query.push_str("select ")
+        } else {
+            query.push_str("     , ")
+        }
+        write!(
+            query,
+            // this ordering is strongly coupled to DbDatom::from_columns
+            "_dtm{}.e, _dtm{}.a, _dtm{}.is_ref, _dtm{}.v",
+            n, n, n, n
+        )?;
+        query.push_str("\n");
+    }
+
+    Ok(())
+}
+
 /// todo this only supports owned queries, the params can't borrow from Projection
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<V>,
@@ -168,6 +195,36 @@ pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt
     write!(query, "_dtm{}.{}", l.datomset.0, column)
 }
 
-// fn datomset_alias(d: DatomSet) -> String {
-//     format!("_d{}", d.0)
-// }
+pub struct RowCursor<'a> {
+    pub row: &'a rusqlite::Row<'a>,
+    pub cursor: usize,
+}
+
+impl<'a> RowCursor<'a> {
+    pub fn get<T: rusqlite::types::FromSql>(&mut self) -> rusqlite::Result<T> {
+        let res = self.row.get::<_, T>(self.cursor);
+        self.cursor += 1;
+        res
+    }
+}
+
+impl<'a> From<&'a rusqlite::Row<'a>> for RowCursor<'a> {
+    fn from(row: &'a rusqlite::Row<'a>) -> Self {
+        RowCursor {
+            row,
+            cursor: Default::default(),
+        }
+    }
+}
+
+#[test]
+fn test_cursored_get() -> rusqlite::Result<()> {
+    let conn = rusqlite::Connection::open_in_memory()?;
+    let mut stmt = conn.prepare("select 1, 2, 3")?;
+    let foo = stmt.query_row(rusqlite::params![], |row| {
+        let mut c = RowCursor::from(row);
+        Ok((c.get()?, c.get()?, c.get()?))
+    })?;
+    assert_eq!(foo, (1, 2, 3));
+    Ok(())
+}

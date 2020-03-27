@@ -65,6 +65,8 @@ mod sql;
 
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 pub use dialogue::Pattern;
 pub use matter::{Projection, Selection, Where};
 
@@ -80,6 +82,7 @@ pub type EntityHandle = uuid::Uuid;
 pub type AttributeId = i64;
 pub type AttributeHandle = str;
 
+// TODO get rid of this? this is super annoying?
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Value<T> {
     Entity(EntityId),
@@ -124,13 +127,20 @@ impl<T> DbDatom<T> {
     where
         T: rusqlite::types::FromSql,
     {
-        let entity = row.get(0)?;
-        let attribute = row.get(1)?;
-        let is_ref = row.get(2)?;
+        Self::from_columns(&mut sql::RowCursor::from(row))
+    }
+
+    pub fn from_columns<'a>(row: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
+    where
+        T: rusqlite::types::FromSql,
+    {
+        let entity = row.get()?;
+        let attribute = row.get()?;
+        let is_ref = row.get()?;
         let value = if is_ref {
-            Value::Entity(row.get(3)?)
+            Value::Entity(row.get()?)
         } else {
-            Value::Other(row.get(3)?)
+            Value::Other(row.get()?)
         };
         Ok(DbDatom {
             entity,
@@ -235,17 +245,81 @@ impl<'tx> Session<'tx> {
               JOIN entities ON datoms.e = entities.rowid
               JOIN attributes ON datoms.a = attributes.rowid"#;
         let mut stmt = self.tx.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
-            let entity = row.get(0)?;
-            let attribute = row.get(1)?;
-            let value: T = row.get(2)?;
-            Ok(Datom {
-                entity,
-                attribute,
-                value,
-            })
-        })?;
+        let rows = stmt.query_map(rusqlite::NO_PARAMS, Datom::from_row)?;
         rows.collect::<_>()
+    }
+
+    fn find<'p, T>(
+        &self,
+        top: &'p str,
+        terms: Vec<dialogue::Pattern<'p, T>>,
+    ) -> anyhow::Result<Vec<HashMap<AttributeId, Value<T>>>>
+    where
+        T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
+    {
+        let mut query = sql::GenericQuery::default();
+
+        let wh = dialogue::Where { terms };
+        let p = Projection::of(&wh);
+        let top = p.variables().get(top).expect("undefined variable?");
+
+        sql::select_datomsets(&p, &mut query).unwrap();
+        sql::projection_sql(&p, &mut query).unwrap();
+
+        eprintln!("{}", query);
+
+        let mut stmt = self.tx.prepare(query.as_str())?;
+        let rows = stmt.query_map(query.params(), |row| {
+            let mut c = sql::RowCursor::from(row);
+            (0..p.datomsets())
+                .map(|_| DbDatom::<T>::from_columns(&mut c))
+                .collect::<rusqlite::Result<Vec<DbDatom<_>>>>()
+        })?;
+
+        rows.map(|datoms| {
+            let datoms: Vec<DbDatom<_>> = datoms?;
+            // group datoms from each row by entity
+            let mut by_ent: HashMap<EntityId, HashMap<AttributeId, Value<T>>> = HashMap::new();
+            // later return the entity for the `top` variable
+            let mut top_ent = Option::<EntityId>::None;
+
+            for (n, datom) in datoms.into_iter().enumerate() {
+                if n == top.datomset.0 {
+                    let e = match top.field {
+                        matter::Field::Entity => datom.entity,
+                        matter::Field::Value => match datom.value {
+                            Value::Entity(e) => e,
+                            _ => continue,
+                        },
+                        _ => continue,
+                    };
+                    top_ent.replace(e);
+                }
+
+                match by_ent.get_mut(&datom.entity) {
+                    Some(map) => {
+                        map.insert(datom.attribute, datom.value);
+                    }
+                    None => {
+                        let mut map: HashMap<AttributeId, _> = HashMap::new();
+                        map.insert(datom.attribute, datom.value);
+                        by_ent.insert(datom.entity, map);
+                    }
+                }
+            }
+
+            let top_ent = top_ent.expect("variable did not match an entity");
+            let top_map = by_ent
+                .remove(&top_ent)
+                .expect("this is an actual panic; todo explain why");
+
+            // for attr, val top_map.iter_mut()
+
+            return Ok(top_map);
+
+            // fn reassemble<K, V>(to: &mut HashMap, from: &mut HashMap
+        })
+        .collect()
     }
 }
 
@@ -303,7 +377,7 @@ mod tests {
             let user = s.new_attribute("rating/user")?;
 
             let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(1000) {
+            for result in r.deserialize().take(1500) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -350,31 +424,17 @@ mod tests {
         //     s.all_datoms::<rusqlite::types::Value>()
         // );
 
-        let wh = Where::<&'static str> {
-            terms: vec![
+        let wow = s.find::<rusqlite::types::Value>(
+            "r",
+            vec![
                 pat!(?b "book/title" ?t),
-                pat!(?b "book/rating" ?r),
-                // wow!(4..?r),
+                pat!(?b "book/rating" ?v),
+                pat!(?r "rating/book" ?b),
+                pat!(?r "rating/user" ?u),
             ],
-        };
-        let p = Projection::of(&wh);
+        );
 
-        // let s = p.select(["t", "r"].iter().cloned()).unwrap();
-
-        use crate::sql;
-
-        // let mut query = sql::GenericQuery::from("");
-        // sql::projection_sql(&p, &mut query).unwrap();
-        // query.push_str("limit 10");
-
-        // {
-        //     eprintln!("query:\n{}", query);
-        //     let mut stmt = tx.prepare(query.as_str())?;
-        //     let rows = stmt.query_map(query.params(), |row| Ok((row.get(0)?, row.get(1)?)))?;
-        //     let pants = rows.collect::<rusqlite::Result<Vec<(String, f64)>>>()?;
-        //     eprintln!("{:#?}", pants);
-        //     assert_eq!(pants.len(), 10);
-        // }
+        eprintln!("{:#?}", wow);
 
         Ok(())
     }

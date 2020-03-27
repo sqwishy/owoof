@@ -80,6 +80,104 @@ pub type EntityHandle = uuid::Uuid;
 pub type AttributeId = i64;
 pub type AttributeHandle = str;
 
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum Value<T> {
+    Entity(EntityId),
+    Other(T),
+}
+
+/// reflects the "datoms" table in the database,
+/// which references entities and attributes by rowid
+#[derive(Debug)]
+pub struct DbDatom<T> {
+    entity: EntityId,
+    attribute: AttributeId,
+    value: Value<T>,
+}
+
+impl<T> DbDatom<T> {
+    // pub fn new(entity: EntityId, attribute: AttributeId, value: T) -> Self {
+    //     DbDatom {
+    //         entity,
+    //         attribute,
+    //         value,
+    //     }
+    // }
+
+    pub fn val(entity: EntityId, attribute: AttributeId, value: T) -> Self {
+        DbDatom {
+            entity,
+            attribute,
+            value: Value::Other(value),
+        }
+    }
+
+    pub fn ent(entity: EntityId, attribute: AttributeId, value: EntityId) -> Self {
+        DbDatom {
+            entity,
+            attribute,
+            value: Value::Entity(value),
+        }
+    }
+
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
+    where
+        T: rusqlite::types::FromSql,
+    {
+        let entity = row.get(0)?;
+        let attribute = row.get(1)?;
+        let is_ref = row.get(2)?;
+        let value = if is_ref {
+            Value::Entity(row.get(3)?)
+        } else {
+            Value::Other(row.get(3)?)
+        };
+        Ok(DbDatom {
+            entity,
+            attribute,
+            value,
+        })
+    }
+}
+
+/// A version of DbDatom referencing entities and attributes by public handles.
+///
+/// attribute is parameterized as to use a owned or borrowed string
+#[derive(Debug)]
+pub struct Datom<S, T> {
+    entity: EntityHandle,
+    // TODO, the attribute should probably be an attribute(/entity) id or something
+    attribute: S, //&'s str,
+    value: T,
+}
+
+pub type OwnedDatom<T> = Datom<String, T>;
+
+impl<S, T> Datom<S, T> {
+    pub fn new(entity: EntityHandle, attribute: S, value: T) -> Self {
+        Datom {
+            entity,
+            attribute,
+            value,
+        }
+    }
+
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
+    where
+        S: rusqlite::types::FromSql,
+        T: rusqlite::types::FromSql,
+    {
+        let entity = row.get(0)?;
+        let attribute = row.get(1)?;
+        let value: T = row.get(2)?;
+        Ok(Datom {
+            entity,
+            attribute,
+            value,
+        })
+    }
+}
+
 impl<'tx> Session<'tx> {
     pub fn new(tx: &'tx rusqlite::Transaction) -> Self {
         Session { tx }
@@ -104,35 +202,37 @@ impl<'tx> Session<'tx> {
         Ok(self.tx.last_insert_rowid())
     }
 
-    pub fn assert<S, T>(&self, datom: &Datom<S, T>) -> rusqlite::Result<()>
+    pub fn assert<T>(&self, datom: &DbDatom<T>) -> rusqlite::Result<()>
     where
-        S: rusqlite::ToSql,
         T: rusqlite::ToSql,
     {
-        // TODO this does nothing if the attribute is missing
-        let sql = r#"
-               WITH new (e, a, v)
-                 AS (SELECT ?, attributes.rowid, ? FROM attributes WHERE ident = ?)
-        INSERT INTO datoms (e, a, v)
-             SELECT * FROM new;
-        "#;
+        let sql = r#"INSERT INTO datoms (e, a, v, is_ref) VALUES (?, ?, ?, ?)"#;
         let mut stmt = self.tx.prepare(sql)?;
-        let n = stmt.execute(rusqlite::params![
-            datom.entity,
-            datom.value,
-            datom.attribute
+        let n = stmt.execute(&[
+            &datom.entity as &dyn rusqlite::ToSql,
+            &datom.attribute as &dyn rusqlite::ToSql,
+            match &datom.value {
+                Value::Entity(v) => v as &dyn rusqlite::ToSql,
+                Value::Other(v) => v as &dyn rusqlite::ToSql,
+            },
+            match &datom.value {
+                Value::Entity(_) => &true as &dyn rusqlite::ToSql,
+                Value::Other(_) => &false as &dyn rusqlite::ToSql,
+            },
         ])?;
         assert_eq!(n, 1);
         Ok(())
     }
 
+    /// mostly for debugging ...
     fn all_datoms<T>(&self) -> rusqlite::Result<Vec<OwnedDatom<T>>>
     where
         T: rusqlite::types::FromSql,
     {
         let sql = r#"
-            SELECT e, attributes.ident, v
+            SELECT entities.uuid, attributes.ident, v
               FROM datoms
+              JOIN entities ON datoms.e = entities.rowid
               JOIN attributes ON datoms.a = attributes.rowid"#;
         let mut stmt = self.tx.prepare(sql)?;
         let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
@@ -146,37 +246,6 @@ impl<'tx> Session<'tx> {
             })
         })?;
         rows.collect::<_>()
-    }
-}
-
-// pub struct Transaction<'s> {
-//     // ts: time::DateTime,
-//     datoms: Vec<Datom<'s, std::rc::Rc<dyn std::any::Any>>>,
-// }
-
-// pub enum Change<'s, T> {
-//     Assert(Datom<'s, T>),
-//     Retract(Datom<'s, T>),
-// }
-
-/// Super generic type, not used much except I think to represent what we store in sqlite
-#[derive(Debug)]
-pub struct Datom<S, T> {
-    entity: EntityId,
-    // TODO, the attribute should probably be an attribute(/entity) id or something
-    attribute: S, //&'s str,
-    value: T,
-}
-
-pub type OwnedDatom<T> = Datom<String, T>;
-
-impl<S, T> Datom<S, T> {
-    pub fn new(entity: EntityId, attribute: S, value: T) -> Self {
-        Datom {
-            entity,
-            attribute,
-            value,
-        }
     }
 }
 
@@ -201,60 +270,53 @@ mod tests {
         Ok(conn)
     }
 
-    #[test]
-    fn it_works() -> Result<()> {
-        let mut conn = test_conn()?;
-        let tx = conn.transaction()?;
-        let db = Session::new(&tx);
-
-        let e = db.new_entity()?;
-        db.new_attribute("article/title")?;
-        db.assert(&Datom::new(e, "article/title", "Nice Meme"))?;
-
-        let anchorman: HashMap<_, _> = {
-            let mut v = Vec::<(_, Box<dyn rusqlite::ToSql>)>::new();
-            v.push((
-                "film/title",
-                Box::new("Anchorman: The Legend of Ron Burgundy"),
-            ));
-            v.push(("film/year", Box::new(2004)));
-            v.push(("film/rating", Box::new(7.2)));
-            v.into_iter().collect()
-        };
-
-        let pirates: HashMap<_, _> = {
-            let mut v = Vec::<(_, Box<dyn rusqlite::ToSql>)>::new();
-            v.push((
-                "film/title",
-                Box::new("Pirates of the Caribbean: The Curse of the Black Pearl"),
-            ));
-            v.push(("film/year", Box::new(2003)));
-            v.push(("film/rating", Box::new(8.0)));
-            v.into_iter().collect()
-        };
-
-        Ok(())
-    }
-
     pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
         let mut db = test_conn()?;
         let tx = db.transaction()?;
         let s = Session::new(&tx);
 
-        s.new_attribute("book/title")?;
-        s.new_attribute("book/rating")?;
-        s.new_attribute("book/isbn")?;
-        s.new_attribute("book/authors")?;
+        let mut books = HashMap::<i64, EntityId>::new();
 
-        let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
-        for result in r.deserialize().take(500) {
-            let book: Book = result?;
+        {
+            let title = s.new_attribute("book/title")?;
+            let rating = s.new_attribute("book/rating")?;
+            let isbn = s.new_attribute("book/isbn")?;
+            let authors = s.new_attribute("book/authors")?;
 
-            let e = s.new_entity()?;
-            s.assert(&Datom::new(e, "book/title", book.title))?;
-            s.assert(&Datom::new(e, "book/rating", book.average_rating))?;
-            s.assert(&Datom::new(e, "book/isbn", book.isbn))?;
-            s.assert(&Datom::new(e, "book/authors", book.authors))?;
+            let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
+            for result in r.deserialize().take(500) {
+                let book: Book = result?;
+
+                let e = s.new_entity()?;
+                s.assert(&DbDatom::val(e, title, book.title))?;
+                s.assert(&DbDatom::val(e, rating, book.average_rating))?;
+                s.assert(&DbDatom::val(e, isbn, book.isbn))?;
+                s.assert(&DbDatom::val(e, authors, book.authors))?;
+
+                books.insert(book.book_id, e);
+            }
+        }
+
+        {
+            let rank = s.new_attribute("rating/rank")?; // aka one-to-five
+            let book = s.new_attribute("rating/book")?;
+            let user = s.new_attribute("rating/user")?;
+
+            let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/ratings.csv")?;
+            for result in r.deserialize().take(1000) {
+                let rating: Rating = result?;
+
+                // if this is a rating for a book we didn't add, ignore it
+                let book_ref = match books.get(&rating.book_id) {
+                    None => continue,
+                    Some(v) => v,
+                };
+
+                let e = s.new_entity()?;
+                s.assert(&DbDatom::<rusqlite::types::Value>::ent(e, book, *book_ref))?;
+                s.assert(&DbDatom::val(e, user, rating.user_id))?;
+                s.assert(&DbDatom::val(e, rank, rating.rating))?;
+            }
         }
 
         tx.commit()?;
@@ -262,10 +324,18 @@ mod tests {
 
         #[derive(Debug, serde::Deserialize)]
         struct Book {
+            book_id: i64,
             title: String,
             isbn: String,
             authors: String,
             average_rating: f64,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        struct Rating {
+            user_id: i64,
+            book_id: i64,
+            rating: i64,
         }
     }
 
@@ -275,28 +345,36 @@ mod tests {
         let tx = db.transaction()?;
         let s = Session::new(&tx);
 
-        // eprintln!("all datoms: {:#?}", s.all_datoms::<String>());
+        // eprintln!(
+        //     "all datoms: {:#?}",
+        //     s.all_datoms::<rusqlite::types::Value>()
+        // );
 
         let wh = Where::<&'static str> {
-            terms: vec![pat!(?b "book/title" ?t), pat!(?b "book/rating" ?r)],
+            terms: vec![
+                pat!(?b "book/title" ?t),
+                pat!(?b "book/rating" ?r),
+                // wow!(4..?r),
+            ],
         };
         let p = Projection::of(&wh);
-        let s = p.select(["t", "r"].iter().cloned()).unwrap();
+
+        // let s = p.select(["t", "r"].iter().cloned()).unwrap();
 
         use crate::sql;
 
-        let mut query = sql::GenericQuery::default();
-        sql::selection_sql(&s, &mut query).unwrap();
-        query.push_str("limit 10");
+        // let mut query = sql::GenericQuery::from("");
+        // sql::projection_sql(&p, &mut query).unwrap();
+        // query.push_str("limit 10");
 
-        {
-            eprintln!("query:\n{}", query);
-            let mut stmt = tx.prepare(query.as_str())?;
-            let rows = stmt.query_map(query.params(), |row| Ok((row.get(0)?, row.get(1)?)))?;
-            let pants = rows.collect::<rusqlite::Result<Vec<(String, f64)>>>()?;
-            eprintln!("{:#?}", pants);
-            assert_eq!(pants.len(), 10);
-        }
+        // {
+        //     eprintln!("query:\n{}", query);
+        //     let mut stmt = tx.prepare(query.as_str())?;
+        //     let rows = stmt.query_map(query.params(), |row| Ok((row.get(0)?, row.get(1)?)))?;
+        //     let pants = rows.collect::<rusqlite::Result<Vec<(String, f64)>>>()?;
+        //     eprintln!("{:#?}", pants);
+        //     assert_eq!(pants.len(), 10);
+        // }
 
         Ok(())
     }

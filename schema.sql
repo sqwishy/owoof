@@ -22,6 +22,8 @@ create table "attributes"
     -- attributes?
     ( rowid         integer primary key
     , ident         text    not null
+    -- type?
+    -- , t             blob    not null
     -- one or many;
     -- , cardinality   integer not null default 0
     -- either; not unique, unique for entity-attribute, or unique for attribute ...
@@ -31,10 +33,13 @@ create table "attributes"
 create unique index "attributes_ident" on "attributes" ("ident");
 
 create table "datoms"
-    ( e     integer not null
-    , a     integer not null -- references attributes(id)
+    ( e     integer not null references entities(id)
+    , a     integer not null references attributes(id)
     , v     blob    not null
-    -- denormalized from attributes...
+    -- the value type stored here ...
+    -- the values of this are actually just either an entity reference or not that
+    -- , t     blob    not null
+    , is_ref boolean not null
     -- , is_indexed boolean not null default false
     -- , is_unique  boolean not null default false
     -- , tx    integer not null -- references "db/transactions" (id)

@@ -78,9 +78,9 @@ pub struct Session<'tx> {
 }
 
 pub type EntityId = i64;
-pub type EntityHandle = uuid::Uuid;
+pub type EntityName = uuid::Uuid;
 pub type AttributeId = i64;
-pub type AttributeHandle = str;
+pub type AttributeName = str;
 
 // TODO get rid of this? this is super annoying?
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -93,9 +93,9 @@ pub enum Value<T> {
 /// which references entities and attributes by rowid
 #[derive(Debug)]
 pub struct DbDatom<T> {
-    entity: EntityId,
-    attribute: AttributeId,
-    value: Value<T>,
+    pub entity: EntityId,
+    pub attribute: AttributeId,
+    pub value: Value<T>,
 }
 
 impl<T> DbDatom<T> {
@@ -155,31 +155,35 @@ impl<T> DbDatom<T> {
 /// attribute is parameterized as to use a owned or borrowed string
 #[derive(Debug)]
 pub struct Datom<S, T> {
-    entity: EntityHandle,
-    // TODO, the attribute should probably be an attribute(/entity) id or something
-    attribute: S, //&'s str,
-    value: T,
+    pub entity: EntityName,
+    pub attribute: S, //&'s str,
+    pub value: Value<T>,
 }
 
 pub type OwnedDatom<T> = Datom<String, T>;
 
 impl<S, T> Datom<S, T> {
-    pub fn new(entity: EntityHandle, attribute: S, value: T) -> Self {
-        Datom {
-            entity,
-            attribute,
-            value,
-        }
-    }
-
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
     where
         S: rusqlite::types::FromSql,
         T: rusqlite::types::FromSql,
     {
-        let entity = row.get(0)?;
-        let attribute = row.get(1)?;
-        let value: T = row.get(2)?;
+        Self::from_columns(&mut sql::RowCursor::from(row))
+    }
+
+    pub fn from_columns<'a>(row: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
+    where
+        S: rusqlite::types::FromSql,
+        T: rusqlite::types::FromSql,
+    {
+        let entity = row.get()?;
+        let attribute = row.get()?;
+        let is_ref = row.get()?;
+        let value = if is_ref {
+            Value::Entity(row.get()?)
+        } else {
+            Value::Other(row.get()?)
+        };
         Ok(Datom {
             entity,
             attribute,
@@ -257,18 +261,39 @@ impl<'tx> Session<'tx> {
     where
         T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
     {
-        let mut query = sql::GenericQuery::default();
-
         let wh = dialogue::Where { terms };
         let p = Projection::of(&wh);
         let top = p.variables().get(top).expect("undefined variable?");
 
-        sql::select_datomsets(&p, &mut query).unwrap();
+        let mut query = sql::GenericQuery::default();
+
+        query
+            .push("select ")
+            .iter("     , ", 0..p.datomsets(), |query, n| {
+                use std::fmt::Write;
+                // write!(
+                //     query,
+                //     "
+                //     (select uuid  from entities   where id = _dtm{}.e),
+                //     (select ident from attributes where rowid = _dtm{}.a),
+                //     _dtm{}.is_ref, _dtm{}.v\n",
+                //     n, n, n, n
+                // )
+                write!(
+                    query,
+                    "_dtm{}.e, _dtm{}.a, _dtm{}.is_ref, _dtm{}.v\n",
+                    n, n, n, n
+                )
+            })?;
+
         sql::projection_sql(&p, &mut query).unwrap();
+
+        query.push_str("\nlimit 4");
 
         eprintln!("{}", query);
 
         let mut stmt = self.tx.prepare(query.as_str())?;
+
         let rows = stmt.query_map(query.params(), |row| {
             let mut c = sql::RowCursor::from(row);
             (0..p.datomsets())
@@ -301,7 +326,9 @@ impl<'tx> Session<'tx> {
                         map.insert(datom.attribute, datom.value);
                     }
                     None => {
-                        let mut map: HashMap<AttributeId, _> = HashMap::new();
+                        let mut map: HashMap<AttributeId, Value<T>> = HashMap::new();
+                        // Insert the dumb uuid attribute value whatever?
+                        // map.insert(0, Value::Other(datom.entity));
                         map.insert(datom.attribute, datom.value);
                         by_ent.insert(datom.entity, map);
                     }

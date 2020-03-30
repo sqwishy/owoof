@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use crate::{AttributeHandle, EntityHandle};
+use crate::{AttributeName, EntityName};
 
 #[derive(Debug)]
 pub enum VariableOr<'a, T> {
@@ -19,8 +19,8 @@ pub enum VariableOr<'a, T> {
 #[derive(Debug)]
 pub struct Pattern<'a, V> {
     // todo, less borrowy?
-    pub entity: VariableOr<'a, &'a EntityHandle>,
-    pub attribute: VariableOr<'a, &'a AttributeHandle>,
+    pub entity: VariableOr<'a, &'a EntityName>,
+    pub attribute: VariableOr<'a, &'a AttributeName>,
     pub value: VariableOr<'a, V>,
 }
 

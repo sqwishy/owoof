@@ -76,6 +76,27 @@ impl<T> GenericQuery<T> {
     pub fn add_param(&mut self, p: T) {
         self.params.push(p)
     }
+
+    pub fn push(&mut self, s: &str) -> &mut Self {
+        self.push_str(s);
+        self
+    }
+
+    pub fn iter<I, F>(&mut self, sep: &str, it: I, f: F) -> Result<&mut Self, fmt::Error>
+    where
+        I: Iterator,
+        F: Fn(&mut Self, <I as Iterator>::Item) -> fmt::Result,
+    {
+        for (n, item) in it.enumerate() {
+            if n == 0 {
+                () // self.push_str(head)
+            } else {
+                self.push_str(sep)
+            }
+            f(self, item)?
+        }
+        Ok(self)
+    }
 }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
@@ -121,10 +142,9 @@ where
         write!(
             query,
             // this ordering is strongly coupled to DbDatom::from_columns
-            "_dtm{}.e, _dtm{}.a, _dtm{}.is_ref, _dtm{}.v",
+            "_dtm{}.e, _dtm{}.a, _dtm{}.is_ref, _dtm{}.v\n",
             n, n, n, n
         )?;
-        query.push_str("\n");
     }
 
     Ok(())

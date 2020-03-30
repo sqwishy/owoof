@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug};
 
 pub use crate::dialogue::Where;
-use crate::{dialogue, AttributeHandle, EntityHandle};
+use crate::{dialogue, AttributeName, EntityName};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DatomSet(pub usize);
@@ -62,8 +62,8 @@ pub struct Constraint<'a, V>(pub Location, pub Value<'a, V>);
 #[derive(Debug)]
 pub enum Value<'a, V> {
     Location(Location),
-    Entity(&'a EntityHandle),
-    Attribute(&'a AttributeHandle),
+    Entity(&'a EntityName),
+    Attribute(&'a AttributeName),
     /// This borrows from Pattern
     EqValue(&'a V),
 }
@@ -79,8 +79,8 @@ macro_rules! value_from {
 }
 
 value_from!(Location => Location);
-value_from!(&'a EntityHandle => Entity);
-value_from!(&'a AttributeHandle => Attribute);
+value_from!(&'a EntityName => Entity);
+value_from!(&'a AttributeName => Attribute);
 // This is too generic to receive a From impl ...
 // value_from!(&'a V => EqValue);
 

@@ -13,15 +13,17 @@
 
 -- TODO autoincrement id to avoid re-use?
 create table "entities"
-    ( id   integer primary key
-    , uuid blob    not null unique
+    ( rowid     integer primary key
+    , uuid      blob    not null
     );
+
+create unique index "entities_uuid" on "entities" ("uuid");
 
 create table "attributes"
     -- TODO consider using autoincrement here if this is meant to track historical
     -- attributes?
-    ( rowid         integer primary key
-    , ident         text    not null
+    ( rowid     integer primary key
+    , ident     text    not null
     -- type?
     -- , t             blob    not null
     -- one or many;
@@ -33,8 +35,8 @@ create table "attributes"
 create unique index "attributes_ident" on "attributes" ("ident");
 
 create table "datoms"
-    ( e     integer not null references entities(id)
-    , a     integer not null references attributes(id)
+    ( e     integer not null references entities(rowid)
+    , a     integer not null references attributes(rowid)
     , v     blob    not null
     -- the value type stored here ...
     -- the values of this are actually just either an entity reference or not that

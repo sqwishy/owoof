@@ -82,12 +82,32 @@ pub type EntityName = uuid::Uuid;
 pub type AttributeId = i64;
 pub type AttributeName = str;
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Type {
+    Entity,
+    Other(i64),
+}
+
+// #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+// pub enum Unique {
+//     ForEntity,
+//     ForAttribute,
+// }
+
 // TODO get rid of this? this is super annoying?
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Value<T> {
     Entity(EntityId),
+    // EntityName(EntityName),
     Other(T),
 }
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct Entity(EntityName);
+
+// pub trait Values {
+//     type Entity
+// }
 
 /// reflects the "datoms" table in the database,
 /// which references entities and attributes by rowid
@@ -180,7 +200,7 @@ impl<S, T> Datom<S, T> {
         let attribute = row.get()?;
         let is_ref = row.get()?;
         let value = if is_ref {
-            Value::Entity(row.get()?)
+            todo!() //Value::EntityName(row.get()?)
         } else {
             Value::Other(row.get()?)
         };
@@ -268,13 +288,13 @@ impl<'tx> Session<'tx> {
         let mut query = sql::GenericQuery::default();
 
         query
-            .push("select ")
+            .push("SELECT ")
             .iter("     , ", 0..p.datomsets(), |query, n| {
                 use std::fmt::Write;
                 // write!(
                 //     query,
                 //     "
-                //     (select uuid  from entities   where id = _dtm{}.e),
+                //     (select uuid  from entities   where rowid = _dtm{}.e),
                 //     (select ident from attributes where rowid = _dtm{}.a),
                 //     _dtm{}.is_ref, _dtm{}.v\n",
                 //     n, n, n, n
@@ -288,7 +308,7 @@ impl<'tx> Session<'tx> {
 
         sql::projection_sql(&p, &mut query).unwrap();
 
-        query.push_str("\nlimit 4");
+        query.push_str("LIMIT 4");
 
         eprintln!("{}", query);
 

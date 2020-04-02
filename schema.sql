@@ -19,29 +19,11 @@ create table "entities"
 
 create unique index "entities_uuid" on "entities" ("uuid");
 
-create table "attributes"
-    -- TODO consider using autoincrement here if this is meant to track historical
-    -- attributes?
-    ( rowid     integer primary key
-    , ident     text    not null
-    -- type?
-    -- , t             blob    not null
-    -- one or many;
-    -- , cardinality   integer not null default 0
-    -- either; not unique, unique for entity-attribute, or unique for attribute ...
-    -- , uniqueness    integer not null default 0
-    );
-
-create unique index "attributes_ident" on "attributes" ("ident");
-
 create table "datoms"
     ( e     integer not null references entities(rowid)
-    , a     integer not null references attributes(rowid)
+    , a     integer not null references entities(rowid)
+    , t     integer not null
     , v     blob    not null
-    -- the value type stored here ...
-    -- the values of this are actually just either an entity reference or not that
-    -- , t     blob    not null
-    , is_ref boolean not null
     -- , is_indexed boolean not null default false
     -- , is_unique  boolean not null default false
     -- , tx    integer not null -- references "db/transactions" (id)
@@ -49,10 +31,11 @@ create table "datoms"
 
 -- select * from sqlite_sequence;
 
-create        index "datoms_eav" on "datoms" (e, a, v);
-create        index "datoms_aev" on "datoms" (a, e, v);
+create index "datoms_eav" on "datoms" (e, a, v);
+create index "datoms_aev" on "datoms" (a, e, v);
 -- datoms that are :db/unique or :db/index
-create        index "datoms_ave_index"  on "datoms" (a, v, e);-- where "datoms"."is_indexed";
+create index "datoms_ave_index"  on "datoms" (a, v, e);-- where "datoms"."is_indexed";
+
 -- create unique index "datoms_ave_unique" on "datoms" (a, v, e) where "datoms"."is_unique";
 -- datoms with attributes that are of the type :db.type/ref
 -- create unique index "datoms_vaet" on "datom" (v, a, e);

@@ -5,6 +5,9 @@ use rusqlite::types::ToSql;
 
 use crate::matter::{self, Constraint, DatomSet, Projection, Selection};
 
+pub trait ToSqlDebug: ToSql + Debug {}
+impl<T: ToSql + Debug> ToSqlDebug for T {}
+
 #[derive(Debug)]
 pub struct GenericQuery<T> {
     string: String,
@@ -68,6 +71,12 @@ impl GenericQuery<&dyn ToSql> {
     }
 }
 
+impl GenericQuery<&dyn ToSqlDebug> {
+    pub fn params(&self) -> &[&dyn ToSqlDebug] {
+        self.params.as_slice()
+    }
+}
+
 impl<T> GenericQuery<T> {
     // pub fn aliased_datomset(&mut self, n: DatomSet) -> fmt::Result {
     //     write!(self, "_d{}\n", n.0)
@@ -101,7 +110,7 @@ impl<T> GenericQuery<T> {
 
 pub fn selection_sql<'q, 'a: 'q, V>(
     selection: &'a Selection<V>,
-    query: &'q mut GenericQuery<&'a dyn ToSql>,
+    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
     V: Debug + ToSql,
@@ -113,7 +122,7 @@ where
 
     for (n, loc) in columns.iter().enumerate() {
         if n == 0 {
-            query.push_str("select ")
+            query.push_str("SELECT ")
         } else {
             query.push_str("     , ")
         }
@@ -124,36 +133,9 @@ where
     projection_sql(projection, query)
 }
 
-pub fn select_datomsets<'q, 'a: 'q, V>(
-    projection: &'a Projection<V>,
-    query: &'q mut GenericQuery<&'a dyn ToSql>,
-) -> fmt::Result
-where
-    V: Debug + ToSql,
-{
-    assert!(projection.datomsets() > 0);
-
-    for n in 0..projection.datomsets() {
-        if n == 0 {
-            query.push_str("select ")
-        } else {
-            query.push_str("     , ")
-        }
-        write!(
-            query,
-            // this ordering is strongly coupled to DbDatom::from_columns
-            "_dtm{}.e, _dtm{}.a, _dtm{}.is_ref, _dtm{}.v\n",
-            n, n, n, n
-        )?;
-    }
-
-    Ok(())
-}
-
-/// todo this only supports owned queries, the params can't borrow from Projection
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<V>,
-    query: &'q mut GenericQuery<&'a dyn ToSql>,
+    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
     V: Debug + ToSql,
@@ -174,9 +156,9 @@ where
 
     for (n, constraint) in projection.constraints().iter().enumerate() {
         if n == 0 {
-            query.push_str(" where ")
+            query.push_str(" WHERE ")
         } else {
-            query.push_str("   and ")
+            query.push_str("   AND ")
         }
 
         let Constraint(on, to) = constraint;
@@ -188,9 +170,8 @@ where
             }
             matter::Value::Attribute(handle) => {
                 location_sql(on, &mut query)?;
-                query.push_str(" in ");
-                query.push_str("(select a.rowid from attributes a where a.ident = ?)");
-                query.add_param(handle as &dyn ToSql);
+                query.push_str(" in (SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
+                query.add_param(handle as &dyn ToSqlDebug);
             }
             matter::Value::EqValue(v) => {
                 location_sql(on, &mut query)?;

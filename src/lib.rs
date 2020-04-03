@@ -64,7 +64,7 @@ mod matter;
 mod sql;
 
 use std::collections::HashMap;
-use std::{fmt, ops::Deref};
+use std::{borrow::Cow, fmt, ops::Deref};
 
 use anyhow::Context;
 
@@ -112,6 +112,9 @@ impl Deref for Entity {
 pub enum Value<T> {
     AsIs(T),
     Entity(EntityName),
+    // Text
+    // Real
+    // Integer
 }
 
 impl<T> From<Entity> for Value<T> {
@@ -134,6 +137,7 @@ pub struct Attribute<S> {
 
 pub trait DatomType {
     fn t(&self) -> i64;
+    fn read_column<'s>(col: &'s str) -> Cow<'s, str>;
     fn bind_str(&self) -> &'static str;
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql;
 }
@@ -143,8 +147,12 @@ impl DatomType for Entity {
         1
     }
 
+    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
+        format!("(SELECT uuid FROM entities WHERE rowid = {})", col).into()
+    }
+
     fn bind_str(&self) -> &'static str {
-        "(select rowid from entities where uuid = ?)"
+        "(SELECT rowid FROM entities WHERE uuid = ?)"
     }
 
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
@@ -155,6 +163,10 @@ impl DatomType for Entity {
 impl<T: rusqlite::types::ToSql + fmt::Debug> DatomType for T {
     fn t(&self) -> i64 {
         0
+    }
+
+    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
+        col.into()
     }
 
     fn bind_str(&self) -> &'static str {
@@ -362,18 +374,23 @@ impl<'tx> Session<'tx> {
             .push("SELECT ")
             .iter("     , ", 0..p.datomsets(), |q, n| {
                 use std::fmt::Write;
-                let dtm = format!("_dtm{}", n);
+                // I think if we use writeln! we insert carriage returns on windoge. I don't know
+                // if that will fuck up the query but lets just not do that at all ever anyway.
+                write!(q, "{}\n", Entity::read_column(&format!("_dtm{}.e", n)))?;
                 write!(
                     q,
-                    "(SELECT uuid  FROM entities   WHERE rowid = {}.e), ",
-                    &dtm
+                    ", (SELECT ident FROM attributes WHERE rowid = _dtm{}.a)\n",
+                    n
                 )?;
+                write!(q, ", _dtm{}.t\n", n)?;
                 write!(
                     q,
-                    "(SELECT ident FROM attributes WHERE rowid = {}.a), ",
-                    &dtm
+                    ", CASE _dtm{}.t WHEN 1 THEN {} ELSE _dtm{}.v END\n",
+                    n,
+                    Entity::read_column(&format!("_dtm{}.e", n)),
+                    n,
                 )?;
-                write!(q, "{}.t, {}.v\n", &dtm, &dtm)
+                Ok(())
             })?;
 
         sql::projection_sql(&p, &mut query).unwrap();
@@ -597,7 +614,7 @@ mod tests {
         // );
 
         let wow = s.find::<rusqlite::types::Value>(
-            "b",
+            "r",
             vec![
                 pat!(?b "book/title" ?t),
                 pat!(?b "book/avg_rating" ?v),

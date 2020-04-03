@@ -146,7 +146,7 @@ where
 
     for n in 0usize..projection.datomsets() {
         if n == 0 {
-            query.push_str("  from datoms ")
+            query.push_str("  FROM datoms ")
         } else {
             query.push_str("     , datoms ")
         }

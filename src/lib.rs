@@ -195,6 +195,18 @@ pub struct Datom<S, T> {
 pub type OwnedDatom<T> = Datom<String, T>;
 
 impl<S, T> Datom<S, T> {
+    pub fn from_eav(entity: EntityName, attribute: S, value: Value<T>) -> Self {
+        Self {
+            entity,
+            attribute,
+            value,
+        }
+    }
+
+    pub fn eav(self) -> (EntityName, S, Value<T>) {
+        (self.entity, self.attribute, self.value)
+    }
+
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
     where
         S: rusqlite::types::FromSql,
@@ -203,24 +215,19 @@ impl<S, T> Datom<S, T> {
         Self::from_columns(&mut sql::RowCursor::from(row))
     }
 
-    pub fn from_columns<'a>(row: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
+    /// Expects a columns in the form of `e a is_ref v`
+    pub fn from_columns<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
     where
         S: rusqlite::types::FromSql,
         T: rusqlite::types::FromSql,
     {
-        let entity = row.get()?;
-        let attribute = row.get()?;
-        let is_ref = row.get()?;
-        let value = if is_ref {
-            todo!() //Value::EntityName(row.get()?)
-        } else {
-            Value::AsIs(row.get()?)
+        let e = c.get()?;
+        let a = c.get()?;
+        let v = match c.get()? {
+            1 => Value::Entity(c.get()?),
+            _ => Value::AsIs(c.get()?),
         };
-        Ok(Datom {
-            entity,
-            attribute,
-            value,
-        })
+        Ok(Datom::from_eav(e, a, v))
     }
 }
 
@@ -350,67 +357,69 @@ impl<'tx> Session<'tx> {
         let rows = stmt.query_map(query.params(), |row| {
             let mut c = sql::RowCursor::from(row);
             (0..p.datomsets())
-                .map(|_| {
-                    let e = c.get()?;
-                    let a = c.get()?;
-                    let v = match c.get()? {
-                        1 => Value::Entity(c.get()?),
-                        _ => Value::AsIs(c.get()?),
-                    };
-                    Ok((e, a, v))
-                })
-                .collect::<rusqlite::Result<Vec<_>>>()
+                .map(|_| Datom::from_columns(&mut c))
+                .collect::<rusqlite::Result<Vec<OwnedDatom<_>>>>()
         })?;
 
-        rows.map(|datoms| {
-            let datoms: Vec<(EntityName, String, Value<T>)> = datoms?;
-            // group datoms from each row by entity
-            let mut by_ent: HashMap<EntityName, HashMap<String, Value<T>>> = HashMap::new();
-            // later return the entity for the `top` variable
-            let mut top_ent = Option::<EntityName>::None;
+        weird_grouping(top, rows)
+    }
+}
 
-            for (n, datom) in datoms.into_iter().enumerate() {
-                let (entity, attribute, value) = datom;
+fn weird_grouping<T, I>(
+    top: &matter::Location,
+    rows: I,
+) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
+where
+    I: Iterator<Item = rusqlite::Result<Vec<OwnedDatom<T>>>>,
+{
+    rows.map(|datoms| {
+        let datoms: Vec<OwnedDatom<T>> = datoms?;
+        // group datoms from each row by entity
+        let mut by_ent: HashMap<EntityName, HashMap<String, Value<T>>> = HashMap::new();
+        // later return the entity for the `top` variable
+        let mut top_ent = Option::<EntityName>::None;
 
-                if n == top.datomset.0 {
-                    let e = match top.field {
-                        matter::Field::Entity => entity,
-                        matter::Field::Value => match value {
-                            Value::Entity(e) => e,
-                            _ => continue,
-                        },
+        for (n, datom) in datoms.into_iter().enumerate() {
+            let (entity, attribute, value) = datom.eav();
+
+            if n == top.datomset.0 {
+                let e = match top.field {
+                    matter::Field::Entity => entity,
+                    matter::Field::Value => match value {
+                        Value::Entity(e) => e,
                         _ => continue,
-                    };
-                    top_ent.replace(e);
-                }
-
-                match by_ent.get_mut(&entity) {
-                    Some(map) => {
-                        map.insert(attribute, value);
-                    }
-                    None => {
-                        // map.insert("entity/uuid".to_owned(), Value::Entity(entity));
-                        let mut map: HashMap<String, Value<T>> = HashMap::new();
-                        map.insert(attribute, value);
-                        by_ent.insert(entity, map);
-                    }
-                }
+                    },
+                    _ => continue,
+                };
+                top_ent.replace(e);
             }
 
-            let top_ent = top_ent.expect("variable did not match an entity");
-            let top_map = by_ent
-                .remove(&top_ent)
-                .expect("this is an actual panic; todo explain why");
+            match by_ent.get_mut(&entity) {
+                Some(map) => {
+                    map.insert(attribute, value);
+                }
+                None => {
+                    // map.insert("entity/uuid".to_owned(), Value::Entity(entity));
+                    let mut map: HashMap<String, Value<T>> = HashMap::new();
+                    map.insert(attribute, value);
+                    by_ent.insert(entity, map);
+                }
+            }
+        }
 
-            // for attr, val top_map.iter_mut()
+        let top_ent = top_ent.expect("variable did not match an entity");
+        let top_map = by_ent
+            .remove(&top_ent)
+            .expect("this is an actual panic; todo explain why");
 
-            return Ok(top_map);
+        // for attr, val top_map.iter_mut()
 
-            // TODO this can't work because Value can't contain more hashmaps ...
-            // fn reassemble<K, V>(to: &mut HashMap, from: &mut HashMap
-        })
-        .collect()
-    }
+        return Ok(top_map);
+
+        // TODO this can't work because Value can't contain more hashmaps ...
+        // fn reassemble<K, V>(to: &mut HashMap, from: &mut HashMap
+    })
+    .collect()
 }
 
 #[cfg(test)]

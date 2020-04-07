@@ -367,31 +367,36 @@ impl<'tx> Session<'tx> {
         let p = Projection::of(&wh);
         let top = p.variables().get(top).expect("undefined variable?");
 
-        // let mut query = sql::GenericQuery::default();
         let mut query = sql::GenericQuery::<&dyn sql::ToSqlDebug>::default();
 
-        query
-            .push("SELECT ")
-            .iter("     , ", 0..p.datomsets(), |q, n| {
-                use std::fmt::Write;
-                // I think if we use writeln! we insert carriage returns on windoge. I don't know
-                // if that will fuck up the query but lets just not do that at all ever anyway.
-                write!(q, "{}\n", Entity::read_column(&format!("_dtm{}.e", n)))?;
-                write!(
-                    q,
-                    ", (SELECT ident FROM attributes WHERE rowid = _dtm{}.a)\n",
-                    n
-                )?;
-                write!(q, ", _dtm{}.t\n", n)?;
-                write!(
-                    q,
-                    ", CASE _dtm{}.t WHEN 1 THEN {} ELSE _dtm{}.v END\n",
-                    n,
-                    Entity::read_column(&format!("_dtm{}.e", n)),
-                    n,
-                )?;
-                Ok(())
-            })?;
+        let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
+        for n in 0..p.datomsets() {
+            use std::fmt::Write;
+            // I think if we use writeln! we insert carriage returns on windoge. I don't know
+            // if that will fuck up the query but lets just not do that at all ever anyway.
+            write!(
+                query,
+                "{}{} -- {}\n",
+                pre.next().unwrap(),
+                Entity::read_column(&format!("_dtm{}.e", n)),
+                n,
+            )?;
+            write!(
+                query,
+                "{}(SELECT ident FROM attributes WHERE rowid = _dtm{}.a)\n",
+                pre.next().unwrap(),
+                n,
+            )?;
+            write!(query, "{}_dtm{}.t\n", pre.next().unwrap(), n)?;
+            write!(
+                query,
+                "{}CASE _dtm{}.t WHEN 1 THEN {} ELSE _dtm{}.v END\n",
+                pre.next().unwrap(),
+                n,
+                Entity::read_column(&format!("_dtm{}.e", n)),
+                n,
+            )?;
+        }
 
         sql::projection_sql(&p, &mut query).unwrap();
 
@@ -445,9 +450,8 @@ impl<'tx> Session<'tx> {
                         map.insert(attribute, value);
                     }
                     None => {
+                        // map.insert("entity/uuid".to_owned(), Value::Entity(entity));
                         let mut map: HashMap<String, Value<T>> = HashMap::new();
-                        // Insert the dumb uuid attribute value whatever?
-                        // map.insert(0, Value::AsIs(datom.entity));
                         map.insert(attribute, value);
                         by_ent.insert(entity, map);
                     }

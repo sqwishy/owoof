@@ -90,23 +90,14 @@ impl<T> GenericQuery<T> {
         self.push_str(s);
         self
     }
-
-    pub fn iter<I, F>(&mut self, sep: &str, it: I, f: F) -> Result<&mut Self, fmt::Error>
-    where
-        I: Iterator,
-        F: Fn(&mut Self, <I as Iterator>::Item) -> fmt::Result,
-    {
-        for (n, item) in it.enumerate() {
-            if n == 0 {
-                () // self.push_str(head)
-            } else {
-                self.push_str(sep)
-            }
-            f(self, item)?
-        }
-        Ok(self)
-    }
 }
+
+// struct<T> Prefixed {
+//     q: GenericQuery<T>
+// }
+//
+// impl <T> Prefixed<T> {
+// }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
     selection: &'a Selection<V>,

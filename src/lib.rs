@@ -182,67 +182,6 @@ impl<T: rusqlite::types::ToSql + fmt::Debug> DatomType for T {
 
 // impl<T> SqlValue for T where T: rusqlite::types::FromSql + rusqlite::types::ToSql {}
 
-/// reflects the "datoms" table in the database,
-/// which references entities and attributes by rowid
-#[derive(Debug)]
-pub struct DbDatom<T> {
-    pub entity: EntityId,
-    pub attribute: AttributeId,
-    pub value: Value<T>,
-}
-
-impl<T> DbDatom<T> {
-    // pub fn new(entity: EntityId, attribute: AttributeId, value: T) -> Self {
-    //     DbDatom {
-    //         entity,
-    //         attribute,
-    //         value,
-    //     }
-    // }
-
-    pub fn val(entity: EntityId, attribute: AttributeId, value: T) -> Self {
-        DbDatom {
-            entity,
-            attribute,
-            value: Value::AsIs(value),
-        }
-    }
-
-    pub fn ent(entity: EntityId, attribute: AttributeId, value: EntityId) -> Self {
-        DbDatom {
-            entity,
-            attribute,
-            value: Value::Entity(todo!()),
-        }
-    }
-
-    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
-    where
-        T: rusqlite::types::FromSql,
-    {
-        Self::from_columns(&mut sql::RowCursor::from(row))
-    }
-
-    pub fn from_columns<'a>(row: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
-    where
-        T: rusqlite::types::FromSql,
-    {
-        let entity = row.get()?;
-        let attribute = row.get()?;
-        let is_ref = row.get()?;
-        let value = if is_ref {
-            Value::Entity(row.get()?)
-        } else {
-            Value::AsIs(row.get()?)
-        };
-        Ok(DbDatom {
-            entity,
-            attribute,
-            value,
-        })
-    }
-}
-
 /// A version of DbDatom referencing entities and attributes by public handles.
 ///
 /// attribute is parameterized as to use a owned or borrowed string

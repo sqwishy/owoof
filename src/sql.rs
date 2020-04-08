@@ -14,7 +14,7 @@ pub struct GenericQuery<T> {
     params: Vec<T>,
 }
 
-// pub type Query = GenericQuery<Box<dyn ToSql>>;
+pub type Query<'a> = GenericQuery<&'a dyn ToSqlDebug>;
 
 impl<T> Default for GenericQuery<T> {
     fn default() -> Self {
@@ -98,31 +98,6 @@ impl<T> GenericQuery<T> {
 //
 // impl <T> Prefixed<T> {
 // }
-
-pub fn selection_sql<'q, 'a: 'q, V>(
-    selection: &'a Selection<V>,
-    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
-) -> fmt::Result
-where
-    V: Debug + ToSql,
-{
-    let Selection {
-        columns,
-        projection,
-    } = selection;
-
-    for (n, loc) in columns.iter().enumerate() {
-        if n == 0 {
-            query.push_str("SELECT ")
-        } else {
-            query.push_str("     , ")
-        }
-        location_sql(loc, query)?;
-        query.push_str("\n");
-    }
-
-    projection_sql(projection, query)
-}
 
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<V>,

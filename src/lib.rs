@@ -74,9 +74,13 @@ pub use matter::{Projection, Selection, Where};
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
 /// Hard coded attribute row ID for "entity/uuid" ...
-pub const ENTITY_UUID: i64 = 1;
+pub const ENTITY_UUID: i64 = -1;
 /// Hard coded attribute row ID for "attr/ident" ...
-pub const ATTR_IDENT: i64 = 2;
+/// This is referenced literally in the "attributes" database view.
+pub const ATTR_IDENT: i64 = -2;
+
+pub const PLAIN_T: i64 = 0;
+pub const ENTITY_T: i64 = -1;
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
 pub struct Session<'tx> {
@@ -108,13 +112,14 @@ impl Deref for Entity {
 }
 
 // TODO get rid of this? this is super annoying?
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Value<T> {
     AsIs(T),
     Entity(EntityName),
-    // Text
-    // Real
-    // Integer
+    Text(String),
+    Real(f64),
+    Integer(i64),
+    Uuid(uuid::Uuid),
 }
 
 impl<T> From<Entity> for Value<T> {
@@ -135,16 +140,22 @@ pub struct Attribute<S> {
     pub ident: S,
 }
 
-pub trait DatomType {
+pub trait Valuable {
     fn t(&self) -> i64;
     fn read_column<'s>(col: &'s str) -> Cow<'s, str>;
     fn bind_str(&self) -> &'static str;
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql;
+    // fn from_sql(t: i64, v: rusqlite::types::ValueRef) -> Result<Self, ValueError>
+    // where
+    //     Self: rusqlite::types::FromSql + Sized,
+    // {
+    //     Ok(rusqlite::types::FromSql::column_result(v)?)
+    // }
 }
 
-impl DatomType for Entity {
+impl Valuable for Entity {
     fn t(&self) -> i64 {
-        1
+        ENTITY_T
     }
 
     fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
@@ -160,9 +171,9 @@ impl DatomType for Entity {
     }
 }
 
-impl<T: rusqlite::types::ToSql + fmt::Debug> DatomType for T {
+impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
     fn t(&self) -> i64 {
-        0
+        PLAIN_T
     }
 
     fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
@@ -176,6 +187,14 @@ impl<T: rusqlite::types::ToSql + fmt::Debug> DatomType for T {
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
         self
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ValueError {
+    #[error("invalid type header sentinel thing")]
+    InvalidT,
+    #[error("database type error")]
+    Sql(#[from] rusqlite::types::FromSqlError),
 }
 
 // pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
@@ -224,7 +243,7 @@ impl<S, T> Datom<S, T> {
         let e = c.get()?;
         let a = c.get()?;
         let v = match c.get()? {
-            1 => Value::Entity(c.get()?),
+            ENTITY_T => Value::Entity(c.get()?),
             _ => Value::AsIs(c.get()?),
         };
         Ok(Datom::from_eav(e, a, v))
@@ -250,8 +269,8 @@ impl<'tx> Session<'tx> {
         let e = self.new_entity()?;
         let rowid = self.tx.last_insert_rowid();
         let n = self.tx.execute(
-            "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, 0, ?)",
-            rusqlite::params![rowid, ATTR_IDENT, ident],
+            "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
+            rusqlite::params![rowid, ATTR_IDENT, PLAIN_T, ident],
         )?;
         assert_eq!(n, 1);
         Ok(Attribute {
@@ -262,7 +281,7 @@ impl<'tx> Session<'tx> {
 
     pub fn assert<T>(&self, e: &EntityName, a: &AttributeName, v: &T) -> rusqlite::Result<()>
     where
-        T: DatomType, // T: rusqlite::ToSql + fmt::Debug + DatomType,
+        T: Valuable, // T: rusqlite::ToSql + fmt::Debug + Valuable,
     {
         let sql = format!(
             r#"
@@ -291,6 +310,7 @@ impl<'tx> Session<'tx> {
     where
         T: rusqlite::types::FromSql,
     {
+        // TODO this ignores the t value
         let sql = r#"
             SELECT entities.uuid, attributes.ident, 0, v
               FROM datoms
@@ -301,8 +321,8 @@ impl<'tx> Session<'tx> {
         rows.collect::<_>()
     }
 
-    fn find<'p, T>(
-        &self,
+    fn find<'s, 'p, T>(
+        &'s self,
         top: &'p str,
         terms: Vec<dialogue::Pattern<'p, T>>,
     ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
@@ -313,7 +333,7 @@ impl<'tx> Session<'tx> {
         let p = Projection::of(&wh);
         let top = p.variables().get(top).expect("undefined variable?");
 
-        let mut query = sql::GenericQuery::<&dyn sql::ToSqlDebug>::default();
+        let mut query = sql::Query::default();
 
         let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
         for n in 0..p.datomsets() {
@@ -344,10 +364,11 @@ impl<'tx> Session<'tx> {
             )?;
         }
 
+        // add FROM and WHERE clause to query
         sql::projection_sql(&p, &mut query).unwrap();
 
         // TODO
-        query.push_str("LIMIT 10");
+        query.push_str(" LIMIT 10");
 
         eprintln!("{}", query);
         eprintln!(">>> {:?}", query.params());
@@ -365,11 +386,22 @@ impl<'tx> Session<'tx> {
     }
 }
 
+// #[derive(Debug)]
+// pub struct Find<'s, 'q, T> {
+//     s: Session<'s>,
+//     /// This should be a query where result columns
+//     q: sql::Query<'q>,
+// }
+//
+// impl<'s, 'q, T> Find<'s, 'q, T> {
+// }
+
 fn weird_grouping<T, I>(
     top: &matter::Location,
     rows: I,
 ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
 where
+    T: fmt::Debug,
     I: Iterator<Item = rusqlite::Result<Vec<OwnedDatom<T>>>>,
 {
     rows.map(|datoms| {
@@ -460,23 +492,27 @@ mod tests {
 
         tx.execute(
             "INSERT INTO datoms (e, a, t, v)
-                  VALUES (?, ?, 0, ?)
-                       , (?, ?, 0, ?)",
+                  VALUES (?, ?, ?, ?)
+                       , (?, ?, ?, ?)",
             rusqlite::params![
-                ENTITY_UUID,   // the entity/uuid attribute
-                ATTR_IDENT,    // has a attr/ident attribue
+                ENTITY_UUID, // the entity/uuid attribute
+                ATTR_IDENT,  // has a attr/ident attribue
+                PLAIN_T,
                 "entity/uuid", // of this string
                 ATTR_IDENT,
                 ATTR_IDENT,
+                PLAIN_T,
                 "attr/ident",
             ],
         )
         .map(|n| assert_eq!(n, 2))?;
 
-        // where 2 matches ATTR_IDENT
         tx.execute(
-            "create view attributes (rowid, ident)
-                      as select e, v from datoms where a = 2",
+            &format!(
+                "create view attributes (rowid, ident)
+                          as select e, v from datoms where a = {}",
+                ATTR_IDENT,
+            ),
             rusqlite::NO_PARAMS,
         )?;
 
@@ -566,12 +602,13 @@ mod tests {
         // );
 
         let wow = s.find::<rusqlite::types::Value>(
-            "r",
+            "b",
             vec![
                 pat!(?b "book/title" ?t),
                 pat!(?b "book/avg_rating" ?v),
-                pat!(?r "rating/book" ?b),
+                // pat!(?r "rating/book" ?b),
                 // pat!(?r "rating/user" ?u),
+                // pat!(?r "rating/rank" ?k),
             ],
         );
 

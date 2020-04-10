@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::{AttributeName, EntityName};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum VariableOr<'a, T> {
     Variable(&'a str),
     Value(T),
@@ -24,16 +24,36 @@ pub struct Pattern<'a, V> {
     pub value: VariableOr<'a, V>,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum Logic<T> {
-    // Neg(T),
-    Or(T),
-    And(T),
+#[derive(Debug, PartialEq, Eq)]
+pub enum Predicate<'a, V> {
+    Gt(&'a str, VariableOr<'a, V>),
+    Ge(&'a str, VariableOr<'a, V>),
+    Lt(&'a str, VariableOr<'a, V>),
+    Le(&'a str, VariableOr<'a, V>),
 }
 
 #[derive(Debug)]
 pub struct Where<'a, V> {
     pub terms: Vec<Pattern<'a, V>>,
+    pub preds: Vec<Predicate<'a, V>>,
+}
+
+impl<'a, V> Default for Where<'a, V> {
+    fn default() -> Self {
+        Where {
+            terms: vec![],
+            preds: vec![],
+        }
+    }
+}
+
+impl<'a, V> From<Vec<Pattern<'a, V>>> for Where<'a, V> {
+    fn from(terms: Vec<Pattern<'a, V>>) -> Self {
+        Where {
+            terms,
+            ..Where::default()
+        }
+    }
 }
 
 #[macro_export]
@@ -56,7 +76,29 @@ macro_rules! pat {
         $crate::dialogue::VariableOr::Variable(stringify!($v))
     };
     (:val $v:tt) => {
-        $crate::dialogue::VariableOr::Value($v)
+        $crate::dialogue::VariableOr::Value($v.into())
+    };
+}
+
+#[macro_export]
+macro_rules! prd {
+    (?$e:ident < ?$v:ident) => {{
+       $crate::dialogue::Predicate::Lt(
+           stringify!($e),
+           prd!(:var $v),
+        )
+    }};
+    (?$e:ident < $v:tt) => {{
+       $crate::dialogue::Predicate::Lt(
+           stringify!($e),
+           prd!(:val $v),
+        )
+    }};
+    (:var $v:ident) => {
+        $crate::dialogue::VariableOr::Variable(stringify!($v))
+    };
+    (:val $v:tt) => {
+        $crate::dialogue::VariableOr::Value($v.into())
     };
 }
 

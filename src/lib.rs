@@ -50,9 +50,12 @@
 //!
 //! where ?c :person/dob ?d
 //!       ?p :person/parent ?c
-//!    if ?d > "Jan 1 2020"
+//!   for "Jan 1 2020" =.. ?d .. "Jan 1 2021"
 //!  show ?c :person/name
 //!       ?p :person/name
+//! (or)
+//! where ?c :person/dob ?d | "Jan 1 2020" <= ?d < "Jan 1 2021"
+//!       ?p :person/parent ?c
 //!
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -68,15 +71,15 @@ use std::{borrow::Cow, fmt, ops::Deref};
 
 use anyhow::Context;
 
-pub use dialogue::Pattern;
+pub use dialogue::{Pattern, Predicate};
 pub use matter::{Projection, Selection, Where};
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
-/// Hard coded attribute row ID for "entity/uuid" ...
+/// Hard coded entity row ID for attribute of the identifier "entity/uuid" ...
 pub const ENTITY_UUID: i64 = -1;
-/// Hard coded attribute row ID for "attr/ident" ...
-/// This is referenced literally in the "attributes" database view.
+/// Hard coded entity row ID for attribute of the identifier "attr/ident" ...
+/// This is referenced _literally_ in the "attributes" database view.
 pub const ATTR_IDENT: i64 = -2;
 
 pub const PLAIN_T: i64 = 0;
@@ -329,7 +332,7 @@ impl<'tx> Session<'tx> {
     where
         T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
     {
-        let wh = dialogue::Where { terms };
+        let wh = dialogue::Where::from(terms);
         let p = Projection::of(&wh);
         let top = p.variables().get(top).expect("undefined variable?");
 
@@ -385,16 +388,6 @@ impl<'tx> Session<'tx> {
         weird_grouping(top, rows)
     }
 }
-
-// #[derive(Debug)]
-// pub struct Find<'s, 'q, T> {
-//     s: Session<'s>,
-//     /// This should be a query where result columns
-//     q: sql::Query<'q>,
-// }
-//
-// impl<'s, 'q, T> Find<'s, 'q, T> {
-// }
 
 fn weird_grouping<T, I>(
     top: &matter::Location,
@@ -601,18 +594,24 @@ mod tests {
         //     s.all_datoms::<rusqlite::types::Value>()
         // );
 
-        let wow = s.find::<rusqlite::types::Value>(
-            "b",
-            vec![
-                pat!(?b "book/title" ?t),
-                pat!(?b "book/avg_rating" ?v),
-                // pat!(?r "rating/book" ?b),
-                // pat!(?r "rating/user" ?u),
-                // pat!(?r "rating/rank" ?k),
-            ],
-        );
+        let mut f = Where::<rusqlite::types::Value>::from(vec![
+            pat!(?b "book/title" ?t),
+            pat!(?b "book/avg_rating" ?v),
+        ]);
+        f.preds.push(prd!(?v < 1));
 
-        eprintln!("{:#?}", wow);
+        // let wow = s.find::<rusqlite::types::Value>(
+        //     "b",
+        //     vec![
+        //         pat!(?b "book/title" ?t),
+        //         pat!(?b "book/avg_rating" ?v),
+        //         // pat!(?r "rating/book" ?b),
+        //         // pat!(?r "rating/user" ?u),
+        //         // pat!(?r "rating/rank" ?k),
+        //     ],
+        // );
+
+        eprintln!("{:#?}", f);
 
         Ok(())
     }

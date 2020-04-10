@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, iter};
 
 pub use crate::dialogue::Where;
 use crate::{dialogue, AttributeName, EntityName};
@@ -66,6 +66,15 @@ pub enum Value<'a, V> {
     Attribute(&'a AttributeName),
     /// This borrows from Pattern
     EqValue(&'a V),
+    CompareLocation {
+        op: dialogue::PredicateOp,
+        to: Location,
+    },
+    CompareValue {
+        // todo rename BinaryOp and place in this module
+        op: dialogue::PredicateOp,
+        to: &'a V,
+    },
 }
 
 macro_rules! value_from {
@@ -110,25 +119,27 @@ where
     V: Debug,
 {
     pub fn of<'w: 'a>(wh: &'w Where<V>) -> Self {
+        Self::from_patterns(&wh.terms)
+    }
+
+    pub fn from_patterns(patterns: &'a Vec<dialogue::Pattern<'a, V>>) -> Self {
         let mut p = Self::default();
-        for term in wh.terms.iter() {
-            p.add_pattern(term);
-        }
+        p.add_patterns(patterns);
         p
     }
 
-    pub fn select<'v, I: Iterator<Item = &'v str>>(
-        self,
-        i: I,
-    ) -> Result<Selection<'a, V>, &'v str> {
-        let columns = i
-            .map(|var| self.variables.get(var).cloned().ok_or(var))
-            .collect::<Result<Vec<_>, &str>>()?;
-        Ok(Selection {
-            projection: self,
-            columns,
-        })
-    }
+    // pub fn select<'v, I: Iterator<Item = &'v str>>(
+    //     self,
+    //     i: I,
+    // ) -> Result<Selection<'a, V>, &'v str> {
+    //     let columns = i
+    //         .map(|var| self.variables.get(var).cloned().ok_or(var))
+    //         .collect::<Result<Vec<_>, &str>>()?;
+    //     Ok(Selection {
+    //         projection: self,
+    //         columns,
+    //     })
+    // }
 
     pub fn datomsets(&self) -> usize {
         self.sets
@@ -156,6 +167,12 @@ where
             self.constraints.push(equal_to_prior);
         } else {
             self.variables.insert(variable, location);
+        }
+    }
+
+    pub fn add_patterns(&mut self, patterns: &'a Vec<dialogue::Pattern<'a, V>>) {
+        for pattern in patterns {
+            self.add_pattern(pattern);
         }
     }
 

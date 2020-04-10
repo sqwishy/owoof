@@ -71,7 +71,7 @@ use std::{borrow::Cow, fmt, ops::Deref};
 
 use anyhow::Context;
 
-pub use dialogue::{Pattern, Predicate};
+pub use dialogue::Pattern;
 pub use matter::{Projection, Selection, Where};
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
@@ -594,24 +594,33 @@ mod tests {
         //     s.all_datoms::<rusqlite::types::Value>()
         // );
 
-        let mut f = Where::<rusqlite::types::Value>::from(vec![
-            pat!(?b "book/title" ?t),
-            pat!(?b "book/avg_rating" ?v),
-        ]);
-        f.preds.push(prd!(?v < 1));
+        // let mut f = Where::<rusqlite::types::Value>::from(vec![
+        //     pat!(?b "book/title" ?t),
+        //     pat!(?b "book/avg_rating" ?v),
+        //     pat!(?r "rating/book" ?b),
+        //     pat!(?r "rating/user" ?u),
+        //     pat!(?r "rating/rank" ?k),
+        // ]);
+        // f.preds.push(prd!(?v < 1));
 
-        // let wow = s.find::<rusqlite::types::Value>(
-        //     "b",
-        //     vec![
-        //         pat!(?b "book/title" ?t),
-        //         pat!(?b "book/avg_rating" ?v),
-        //         // pat!(?r "rating/book" ?b),
-        //         // pat!(?r "rating/user" ?u),
-        //         // pat!(?r "rating/rank" ?k),
-        //     ],
-        // );
+        // let mut q = dialogue::query::<rusqlite::types::Value>(vec![
+        //     pat!(?b "book/title" ?t),
+        //     pat!(?b "book/avg_rating" ?v),
+        // ]);
+        // q.such_that(vec![prd!(?v < 1)]);
+        // q.show(vec!["t"]);
 
-        eprintln!("{:#?}", f);
+        // eprintln!("{:#?}", q);
+
+        let mut p = Projection::<rusqlite::types::Value>::default();
+
+        let pats = vec![pat!(?b "book/title" ?t), pat!(?b "book/avg_rating" ?v)];
+        // let pred = prd!(?v < 1);
+
+        p.add_patterns(&pats);
+        // p.add_predicate(&pred);
+
+        eprintln!("{:#?}", p);
 
         Ok(())
     }

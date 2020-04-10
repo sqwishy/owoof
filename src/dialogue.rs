@@ -2,7 +2,7 @@
 //!
 //! TODO move this into matter? this is projection stuff?
 
-use std::fmt;
+use std::{fmt, iter};
 
 use crate::{AttributeName, EntityName};
 
@@ -25,17 +25,33 @@ pub struct Pattern<'a, V> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Predicate<'a, V> {
-    Gt(&'a str, VariableOr<'a, V>),
-    Ge(&'a str, VariableOr<'a, V>),
-    Lt(&'a str, VariableOr<'a, V>),
-    Le(&'a str, VariableOr<'a, V>),
+pub struct Predicate<'a, V> {
+    pub op: PredicateOp,
+    pub lh: &'a str,
+    pub rh: VariableOr<'a, V>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PredicateOp {
+    Eq,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+impl<'a, V> Predicate<'a, V> {
+    fn lt(lh: &'a str, rh: VariableOr<'a, V>) -> Self {
+        let op = PredicateOp::Lt;
+        Predicate { op, lh, rh }
+    }
 }
 
 #[derive(Debug)]
 pub struct Where<'a, V> {
     pub terms: Vec<Pattern<'a, V>>,
     pub preds: Vec<Predicate<'a, V>>,
+    pub show: Vec<&'a str>,
 }
 
 impl<'a, V> Default for Where<'a, V> {
@@ -43,6 +59,7 @@ impl<'a, V> Default for Where<'a, V> {
         Where {
             terms: vec![],
             preds: vec![],
+            show: vec![],
         }
     }
 }
@@ -54,6 +71,28 @@ impl<'a, V> From<Vec<Pattern<'a, V>>> for Where<'a, V> {
             ..Where::default()
         }
     }
+}
+
+impl<'a, V> Where<'a, V> {
+    pub fn such_that<P>(&mut self, preds: P) -> &mut Self
+    where
+        P: iter::IntoIterator<Item = Predicate<'a, V>>,
+    {
+        self.preds.extend(preds.into_iter());
+        self
+    }
+
+    pub fn show<P>(&mut self, vars: P) -> &mut Self
+    where
+        P: iter::IntoIterator<Item = &'a str>,
+    {
+        self.show.extend(vars.into_iter());
+        self
+    }
+}
+
+pub fn query<'a, V>(terms: Vec<Pattern<'a, V>>) -> Where<'a, V> {
+    terms.into()
 }
 
 #[macro_export]
@@ -82,18 +121,23 @@ macro_rules! pat {
 
 #[macro_export]
 macro_rules! prd {
-    (?$e:ident < ?$v:ident) => {{
-       $crate::dialogue::Predicate::Lt(
-           stringify!($e),
-           prd!(:var $v),
-        )
+    (?$e:ident $o:tt ?$v:ident) => {{
+       $crate::dialogue::Predicate {
+           op: prd!(:op $o),
+           lh: stringify!($e),
+           rh: prd!(:var $v),
+        }
     }};
-    (?$e:ident < $v:tt) => {{
-       $crate::dialogue::Predicate::Lt(
-           stringify!($e),
-           prd!(:val $v),
-        )
+    (?$e:ident $o:tt $v:tt) => {{
+       $crate::dialogue::Predicate {
+           op: prd!(:op $o),
+           lh: stringify!($e),
+           rh: prd!(:val $v),
+        }
     }};
+    (:op <) => {
+        $crate::dialogue::PredicateOp::Lt
+    };
     (:var $v:ident) => {
         $crate::dialogue::VariableOr::Variable(stringify!($v))
     };

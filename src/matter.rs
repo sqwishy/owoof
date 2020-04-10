@@ -47,7 +47,7 @@ pub struct Location {
 
 macro_rules! _constrain_impl {
     ($name:ident) => {
-        fn $name<'a, V, I>(self, v: I) -> Constraint<'a, V>
+        pub fn $name<'a, V, I>(self, v: I) -> Constraint<'a, V>
         where
             V: 'a,
             I: Into<Concept<'a, V>>,
@@ -66,6 +66,7 @@ impl Location {
         Constraint::eq(self, v.into())
     }
 
+    // todo this is bad method name because it conflicts with the Eq trait or something
     _constrain_impl!(eq);
     _constrain_impl!(ne);
     _constrain_impl!(gt);
@@ -312,8 +313,8 @@ where
         }
     }
 
-    pub fn add_constraint<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<'a, V>) {
-        todo!()
+    pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, V>) {
+        self.constraints.push(c);
     }
 }
 

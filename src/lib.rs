@@ -615,10 +615,16 @@ mod tests {
         let mut p = Projection::<rusqlite::types::Value>::default();
 
         let pats = vec![pat!(?b "book/title" ?t), pat!(?b "book/avg_rating" ?v)];
-        // let pred = prd!(?v < 1);
+        let max_rating = 1.into();
 
         p.add_patterns(&pats);
-        // p.add_predicate(&pred);
+
+        let wat = p
+            .variable("v")
+            .cloned()
+            .unwrap()
+            .le(matter::Concept::Value(&max_rating));
+        p.add_constraint(wat);
 
         eprintln!("{:#?}", p);
 

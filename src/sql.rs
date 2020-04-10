@@ -127,23 +127,23 @@ where
             query.push_str("   AND ")
         }
 
-        let Constraint(on, to) = constraint;
-        match to {
-            matter::Value::Location(l) => {
-                location_sql(on, &mut query)?;
-                query.push_str(" = ");
-                location_sql(l, &mut query)?;
-            }
-            matter::Value::Attribute(handle) => {
-                location_sql(on, &mut query)?;
-                query.push_str(" in (SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
-                query.add_param(handle as &dyn ToSqlDebug);
-            }
-            matter::Value::EqValue(v) => {
-                location_sql(on, &mut query)?;
-                query.push_str(" = ?");
-                query.add_param(v);
-            }
+        let Constraint { lh, op, rh } = constraint;
+        match rh {
+            // matter::Value::Location(l) => {
+            //     location_sql(on, &mut query)?;
+            //     query.push_str(" = ");
+            //     location_sql(l, &mut query)?;
+            // }
+            // matter::Value::Attribute(handle) => {
+            //     location_sql(on, &mut query)?;
+            //     query.push_str(" in (SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
+            //     query.add_param(handle as &dyn ToSqlDebug);
+            // }
+            // matter::Value::EqValue(v) => {
+            //     location_sql(on, &mut query)?;
+            //     query.push_str(" = ?");
+            //     query.add_param(v);
+            // }
             _ => todo!("sql: constrain {:?}", constraint),
         }
 

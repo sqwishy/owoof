@@ -47,6 +47,8 @@ impl<'a, V> Predicate<'a, V> {
     }
 }
 
+/// TODO this entire type seems stupid. At the very least it should own the data so that a
+/// Projection can borrow from it.
 #[derive(Debug)]
 pub struct Where<'a, V> {
     pub terms: Vec<Pattern<'a, V>>,

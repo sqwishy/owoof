@@ -619,14 +619,18 @@ mod tests {
 
         p.add_patterns(&pats);
 
-        let wat = p
-            .variable("v")
-            .cloned()
-            .unwrap()
-            .le(matter::Concept::Value(&max_rating));
-        p.add_constraint(wat);
+        p.add_constraint(
+            p.variable("v")
+                .cloned()
+                .unwrap()
+                .le(matter::Concept::Value(&max_rating)),
+        );
 
         eprintln!("{:#?}", p);
+
+        let mut q = sql::Query::default();
+        sql::projection_sql(&p, &mut q).unwrap();
+        eprintln!("{}", q);
 
         Ok(())
     }

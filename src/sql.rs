@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Constraint, DatomSet, Projection, Selection};
+use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Projection, Selection};
 
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
@@ -128,23 +128,35 @@ where
         }
 
         let Constraint { lh, op, rh } = constraint;
+
+        location_sql(lh, &mut query)?;
+
+        match op {
+            ConstraintOp::Eq => query.push_str(" = "),
+            ConstraintOp::Ne => query.push_str(" != "),
+            ConstraintOp::Gt => query.push_str(" > "),
+            ConstraintOp::Ge => query.push_str(" >= "),
+            ConstraintOp::Lt => query.push_str(" < "),
+            ConstraintOp::Le => query.push_str(" <= "),
+        };
+
         match rh {
-            // matter::Value::Location(l) => {
-            //     location_sql(on, &mut query)?;
-            //     query.push_str(" = ");
-            //     location_sql(l, &mut query)?;
-            // }
-            // matter::Value::Attribute(handle) => {
-            //     location_sql(on, &mut query)?;
-            //     query.push_str(" in (SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
-            //     query.add_param(handle as &dyn ToSqlDebug);
-            // }
-            // matter::Value::EqValue(v) => {
-            //     location_sql(on, &mut query)?;
-            //     query.push_str(" = ?");
-            //     query.add_param(v);
-            // }
-            _ => todo!("sql: constrain {:?}", constraint),
+            Concept::Location(l) => {
+                location_sql(l, &mut query)?;
+            }
+            Concept::Entity(uuid) => {
+                // todo dupes Valuable::bind_str
+                query.push_str("(SELECT rowid FROM entities WHERE uuid = ?)");
+                query.add_param(uuid as &dyn ToSqlDebug);
+            }
+            Concept::Attribute(handle) => {
+                query.push_str("(SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
+                query.add_param(handle as &dyn ToSqlDebug);
+            }
+            Concept::Value(v) => {
+                query.push_str("?");
+                query.add_param(v);
+            } // _ => todo!("sql: constrain {:?}", constraint),
         }
 
         query.push_str("\n");

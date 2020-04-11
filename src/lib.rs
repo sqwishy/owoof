@@ -1,9 +1,9 @@
 //! How is this organized?
 //!
-//! lib - Session & Datom
-//! dialog - mostly tests; Pattern 3-tuple of ?t/T
-//! matter - Projection? Borrows patterns into datom sets & constraints
-//! sql - render a SQL query for a Projection
+//! - lib.rs - Session & Datom
+//! - dialog.rs - mostly tests; Pattern 3-tuple of ?t/T
+//! - matter.rs - Projection? Borrows patterns into datom sets & constraints
+//! - sql.rs - render a SQL query for a Projection
 //!
 //! The names are terrible, iirc there are two interesting ways to view a list
 //! of patterns as a graph.
@@ -90,16 +90,8 @@ pub struct Session<'tx> {
     tx: &'tx rusqlite::Transaction<'tx>,
 }
 
-pub type EntityId = i64;
 pub type EntityName = uuid::Uuid;
-pub type AttributeId = i64;
 pub type AttributeName = str;
-
-// #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-// pub enum Unique {
-//     ForEntity,
-//     ForAttribute,
-// }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
@@ -204,9 +196,9 @@ pub enum ValueError {
 
 // impl<T> SqlValue for T where T: rusqlite::types::FromSql + rusqlite::types::ToSql {}
 
-/// A version of DbDatom referencing entities and attributes by public handles.
+/// An entity-attribute-value tuple thing.
 ///
-/// attribute is parameterized as to use a owned or borrowed string
+/// attribute is parameterized as to use a owned or borrowed string TODO this is stupid
 #[derive(Debug)]
 pub struct Datom<S, T> {
     pub entity: EntityName,
@@ -502,8 +494,8 @@ mod tests {
 
         tx.execute(
             &format!(
-                "create view attributes (rowid, ident)
-                          as select e, v from datoms where a = {}",
+                "CREATE VIEW attributes (rowid, ident)
+                          AS select e, v FROM datoms WHERE a = {}",
                 ATTR_IDENT,
             ),
             rusqlite::NO_PARAMS,

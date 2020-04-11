@@ -724,10 +724,10 @@ mod tests {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
-                s.assert(&e, &title.ident, &book.title)?;
-                s.assert(&e, &avg_rating.ident, &book.average_rating)?;
-                s.assert(&e, &isbn.ident, &book.isbn)?;
-                s.assert(&e, &authors.ident, &book.authors)?;
+                s.assert(&e, &title, &book.title)?;
+                s.assert(&e, &avg_rating, &book.average_rating)?;
+                s.assert(&e, &isbn, &book.isbn)?;
+                s.assert(&e, &authors, &book.authors)?;
 
                 books.insert(book.book_id, e.name);
             }
@@ -749,9 +749,9 @@ mod tests {
                 };
 
                 let e = s.new_entity()?;
-                s.assert(&e, &book.ident, book_ref)?;
-                s.assert(&e, &user.ident, &rating.user_id)?;
-                s.assert(&e, &rank.ident, &rating.rating)?;
+                s.assert(&e, &book, book_ref)?;
+                s.assert(&e, &user, &rating.user_id)?;
+                s.assert(&e, &rank, &rating.rating)?;
             }
         }
 

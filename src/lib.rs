@@ -90,19 +90,36 @@ pub struct Session<'tx> {
     tx: &'tx rusqlite::Transaction<'tx>,
 }
 
-pub type EntityName = uuid::Uuid;
 pub type AttributeName = str;
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub struct EntityName(uuid::Uuid);
+
+impl Deref for EntityName {
+    type Target = uuid::Uuid;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// impl rusqlite::types::ToSql for EntityName {
+//     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+//         *self.to_sql()
+//     }
+// }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
-    pub uuid: EntityName,
+    // pub rowid: i64, todo why?
+    pub name: EntityName,
 }
 
 impl Deref for Entity {
-    type Target = EntityName;
+    type Target = EntityName; //uuid::Uuid;
 
     fn deref(&self) -> &Self::Target {
-        &self.uuid
+        &self.name
     }
 }
 
@@ -119,7 +136,7 @@ pub enum Value<T> {
 
 impl<T> From<Entity> for Value<T> {
     fn from(e: Entity) -> Self {
-        Value::Entity(e.uuid)
+        Value::Entity(e.name)
     }
 }
 
@@ -131,7 +148,7 @@ impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Attribute<S> {
-    pub uuid: EntityName,
+    pub name: EntityName,
     pub ident: S,
 }
 
@@ -140,6 +157,7 @@ pub trait Valuable {
     fn read_column<'s>(col: &'s str) -> Cow<'s, str>;
     fn bind_str(&self) -> &'static str;
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql;
+    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug;
     // fn from_sql(t: i64, v: rusqlite::types::ValueRef) -> Result<Self, ValueError>
     // where
     //     Self: rusqlite::types::FromSql + Sized,
@@ -148,7 +166,7 @@ pub trait Valuable {
     // }
 }
 
-impl Valuable for Entity {
+impl Valuable for EntityName {
     fn t(&self) -> i64 {
         ENTITY_T
     }
@@ -162,7 +180,11 @@ impl Valuable for Entity {
     }
 
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
-        &self.uuid
+        &self.0
+    }
+
+    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
+        &self.0
     }
 }
 
@@ -180,6 +202,10 @@ impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
     }
 
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
+        self
+    }
+
+    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
         self
     }
 }
@@ -235,10 +261,10 @@ impl<S, T> Datom<S, T> {
         S: rusqlite::types::FromSql,
         T: rusqlite::types::FromSql,
     {
-        let e = c.get()?;
+        let e = EntityName(c.get()?);
         let a = c.get()?;
         let v = match c.get()? {
-            ENTITY_T => Value::Entity(c.get()?),
+            ENTITY_T => Value::Entity(EntityName(c.get()?)),
             _ => Value::AsIs(c.get()?),
         };
         Ok(Datom::from_eav(e, a, v))
@@ -257,7 +283,8 @@ impl<'tx> Session<'tx> {
             rusqlite::params![uuid],
         )?;
         assert_eq!(n, 1);
-        Ok(Entity { uuid })
+        let name = EntityName(uuid);
+        Ok(Entity { name })
     }
 
     pub fn new_attribute<'i>(&self, ident: &'i str) -> rusqlite::Result<Attribute<&'i str>> {
@@ -269,14 +296,14 @@ impl<'tx> Session<'tx> {
         )?;
         assert_eq!(n, 1);
         Ok(Attribute {
-            uuid: e.uuid,
+            name: e.name,
             ident,
         })
     }
 
     pub fn assert<T>(&self, e: &EntityName, a: &AttributeName, v: &T) -> rusqlite::Result<()>
     where
-        T: Valuable, // T: rusqlite::ToSql + fmt::Debug + Valuable,
+        T: Valuable,
     {
         let sql = format!(
             r#"
@@ -291,7 +318,7 @@ impl<'tx> Session<'tx> {
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
-            e as &dyn rusqlite::ToSql,
+            e.to_sql() as &dyn rusqlite::ToSql,
             &a as &dyn rusqlite::ToSql,
             &v.t() as &dyn rusqlite::ToSql,
             v.to_sql(),
@@ -339,7 +366,7 @@ impl<'tx> Session<'tx> {
                 query,
                 "{}{} -- {}\n",
                 pre.next().unwrap(),
-                Entity::read_column(&format!("_dtm{}.e", n)),
+                EntityName::read_column(&format!("_dtm{}.e", n)),
                 n,
             )?;
             write!(
@@ -354,7 +381,7 @@ impl<'tx> Session<'tx> {
                 "{}CASE _dtm{}.t WHEN 1 THEN {} ELSE _dtm{}.v END\n",
                 pre.next().unwrap(),
                 n,
-                Entity::read_column(&format!("_dtm{}.e", n)),
+                EntityName::read_column(&format!("_dtm{}.e", n)),
                 n,
             )?;
         }
@@ -511,7 +538,7 @@ mod tests {
         let tx = db.transaction()?;
         let s = Session::new(&tx);
 
-        let mut books = HashMap::<i64, Entity>::new();
+        let mut books = HashMap::<i64, EntityName>::new();
 
         {
             let title = s.new_attribute("book/title")?;
@@ -529,7 +556,7 @@ mod tests {
                 s.assert(&e, isbn.ident, &book.isbn)?;
                 s.assert(&e, authors.ident, &book.authors)?;
 
-                books.insert(book.book_id, e);
+                books.insert(book.book_id, e.name);
             }
         }
 

@@ -145,10 +145,10 @@ where
                 location_sql(l, &mut query)?;
             }
             Concept::Entity(ent) => {
-                //use crate::Valuable;
-                let bind_str = <crate::Entity as crate::Valuable>::bind_str(ent);
+                use crate::Valuable;
+                let bind_str = <crate::EntityName as Valuable>::bind_str(ent);
                 query.push_str(bind_str);
-                query.add_param(ent as &dyn ToSqlDebug);
+                query.add_param(ent.to_sql_dbg() as &dyn ToSqlDebug);
             }
             Concept::Attribute(handle) => {
                 query.push_str("(SELECT a.rowid FROM attributes a WHERE a.ident = ?)");

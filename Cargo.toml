@@ -21,18 +21,8 @@ either = "1.5"                   # The enum `Either` with variants `Left` and `R
 uuid = { version = "0.8", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# fuck?
-# syn = "1"
-# quote = "1"
-# paste = "0.1"          # Macros for all your token pasting needs
-
-# nom = "5"                # A byte-oriented, zero-copy, parser combinators library
-
-lazy_static = "1"
-regex = "1"
-
-# for some mutex thing?
-# parking_lot = "0.9"
+# lazy_static = "1"
+# regex = "1"
 
 [dev-dependencies]
 csv = "1"

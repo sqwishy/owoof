@@ -82,8 +82,10 @@ pub const ENTITY_UUID: i64 = -1;
 /// This is referenced _literally_ in the "attributes" database view.
 pub const ATTR_IDENT: i64 = -2;
 
-pub const PLAIN_T: i64 = 0;
-pub const ENTITY_T: i64 = -1;
+pub const T_PLAIN: i64 = 0;
+pub const T_ENTITY: i64 = -1;
+// pub const T_USER: i64 = 1;
+pub const T_DATETIME: i64 = 1;
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
 pub struct Session<'tx> {
@@ -103,12 +105,6 @@ impl Deref for EntityName {
     }
 }
 
-// impl rusqlite::types::ToSql for EntityName {
-//     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-//         *self.to_sql()
-//     }
-// }
-
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
     // pub rowid: i64, todo why?
@@ -120,29 +116,6 @@ impl Deref for Entity {
 
     fn deref(&self) -> &Self::Target {
         &self.name
-    }
-}
-
-// TODO get rid of this? this is super annoying?
-#[derive(Clone, PartialEq, Debug)]
-pub enum Value<T> {
-    AsIs(T),
-    Entity(EntityName),
-    Text(String),
-    Real(f64),
-    Integer(i64),
-    Uuid(uuid::Uuid),
-}
-
-impl<T> From<Entity> for Value<T> {
-    fn from(e: Entity) -> Self {
-        Value::Entity(e.name)
-    }
-}
-
-impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
-    fn from(v: rusqlite::types::Value) -> Self {
-        Value::AsIs(v)
     }
 }
 
@@ -168,7 +141,7 @@ pub trait Valuable {
 
 impl Valuable for EntityName {
     fn t(&self) -> i64 {
-        ENTITY_T
+        T_ENTITY
     }
 
     fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
@@ -188,9 +161,10 @@ impl Valuable for EntityName {
     }
 }
 
-impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
+// impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
+impl Valuable for rusqlite::types::Value {
     fn t(&self) -> i64 {
-        PLAIN_T
+        T_PLAIN
     }
 
     fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
@@ -210,13 +184,137 @@ impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ValueError {
-    #[error("invalid type header sentinel thing")]
-    InvalidT,
-    #[error("database type error")]
-    Sql(#[from] rusqlite::types::FromSqlError),
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);
+
+impl<T> Deref for MemeTime<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
+
+impl Valuable for chrono::DateTime<chrono::Utc> {
+    fn t(&self) -> i64 {
+        T_DATETIME
+    }
+
+    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
+        col.into()
+    }
+
+    fn bind_str(&self) -> &'static str {
+        "?"
+    }
+
+    fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
+        &MemeTime(self) as &dyn rusqlite::types::ToSql
+    }
+
+    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
+        &MemeTime(self) as &dyn sql::ToSqlDebug
+    }
+}
+
+impl rusqlite::types::ToSql for MemeTime<&chrono::DateTime<chrono::Utc>> {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+        Ok(self.timestamp_millis().into())
+    }
+}
+
+impl rusqlite::types::FromSql for MemeTime<chrono::DateTime<chrono::Utc>> {
+    fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
+        use chrono::TimeZone;
+        value.as_i64().and_then(|v| {
+            chrono::Utc
+                .timestamp_millis_opt(v)
+                .single()
+                // I don't think this can happen with UTC?
+                .ok_or_else(|| rusqlite::types::FromSqlError::OutOfRange(v))
+                .map(chrono::DateTime::<chrono::Utc>::from)
+                .map(MemeTime)
+        })
+    }
+}
+
+// TODO get rid of the T? this is super annoying?
+#[derive(Clone, PartialEq, Debug)]
+pub enum Value<T> {
+    AsIs(T),
+    Entity(EntityName),
+    Null,
+    Text(String),
+    Blob(Vec<u8>),
+    Integer(i64),
+    Real(f64),
+    Uuid(uuid::Uuid),
+    DateTime(chrono::DateTime<chrono::Utc>),
+}
+
+impl<T> From<Entity> for Value<T> {
+    fn from(e: Entity) -> Self {
+        Value::Entity(e.name)
+    }
+}
+
+impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
+    fn from(v: rusqlite::types::Value) -> Self {
+        match v {
+            rusqlite::types::Value::Null => Value::Null,
+            rusqlite::types::Value::Integer(i) => Value::Integer(i),
+            rusqlite::types::Value::Real(i) => Value::Real(i),
+            rusqlite::types::Value::Text(i) => Value::Text(i),
+            rusqlite::types::Value::Blob(i) => Value::Blob(i),
+        }
+    }
+}
+
+impl<T> Value<T> {
+    // fn t(&self) -> i64 {
+    //     match self {
+    //         Value::AsIs(i) => todo!(),
+    //         Value::Entity(i) => i.t(),
+    //         Value::DateTime(i) => i.t(),
+    //         Value::Uuid(_)
+    //         | Value::Null
+    //         | Value::Text(_)
+    //         | Value::Blob(_)
+    //         | Value::Integer(_)
+    //         | Value::Real(_) => T_PLAIN,
+    //     }
+    // }
+
+    fn read_t_v_sql<'s>(t: &'s str, v: &'s str) -> Cow<'s, str> {
+        // TODO it's super dumb to support this extravagant mapping all over the place, it's
+        // uniquely useful for attributes and entities
+        format!(
+            "CASE {}
+             WHEN {} THEN {}
+             WHEN {} THEN {}
+             ELSE {} END",
+            t,
+            T_ENTITY,
+            EntityName::read_column(v),
+            T_DATETIME,
+            chrono::DateTime::<chrono::Utc>::read_column(v),
+            rusqlite::types::Value::read_column(v),
+        )
+        .into()
+    }
+
+    // fn bind_str(&self) -> &'static str {
+    //     "?"
+    // }
+}
+
+// #[derive(Debug, thiserror::Error)]
+// pub enum ValueError {
+//     #[error("invalid type header sentinel thing")]
+//     InvalidT,
+//     #[error("database type error")]
+//     Sql(#[from] rusqlite::types::FromSqlError),
+// }
 
 // pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
 
@@ -250,7 +348,7 @@ impl<S, T> Datom<S, T> {
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
     where
         S: rusqlite::types::FromSql,
-        T: rusqlite::types::FromSql,
+        // T: rusqlite::types::FromSql,
     {
         Self::from_columns(&mut sql::RowCursor::from(row))
     }
@@ -259,13 +357,14 @@ impl<S, T> Datom<S, T> {
     pub fn from_columns<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
     where
         S: rusqlite::types::FromSql,
-        T: rusqlite::types::FromSql,
+        // T: rusqlite::types::FromSql,
     {
         let e = EntityName(c.get()?);
         let a = c.get()?;
         let v = match c.get()? {
-            ENTITY_T => Value::Entity(EntityName(c.get()?)),
-            _ => Value::AsIs(c.get()?),
+            T_ENTITY => Value::Entity(EntityName(c.get()?)),
+            T_DATETIME => Value::DateTime(c.get()?),
+            _ => Value::from(c.get::<rusqlite::types::Value>()?),
         };
         Ok(Datom::from_eav(e, a, v))
     }
@@ -292,7 +391,7 @@ impl<'tx> Session<'tx> {
         let rowid = self.tx.last_insert_rowid();
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![rowid, ATTR_IDENT, PLAIN_T, ident],
+            rusqlite::params![rowid, ATTR_IDENT, T_PLAIN, ident],
         )?;
         assert_eq!(n, 1);
         Ok(Attribute {
@@ -349,6 +448,7 @@ impl<'tx> Session<'tx> {
         terms: Vec<dialogue::Pattern<'p, T>>,
     ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
     where
+        // T: Valuable + fmt::Debug,
         T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
     {
         let wh = dialogue::Where::from(terms);
@@ -376,14 +476,13 @@ impl<'tx> Session<'tx> {
                 n,
             )?;
             write!(query, "{}_dtm{}.t\n", pre.next().unwrap(), n)?;
+            // TODO this is horribly wrong
             write!(
                 query,
-                "{}CASE _dtm{}.t WHEN 1 THEN {} ELSE _dtm{}.v END\n",
+                "{}{}\n",
                 pre.next().unwrap(),
-                n,
-                EntityName::read_column(&format!("_dtm{}.e", n)),
-                n,
-            )?;
+                Value::<T>::read_t_v_sql(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n),),
+            );
         }
 
         // add FROM and WHERE clause to query
@@ -509,11 +608,11 @@ mod tests {
             rusqlite::params![
                 ENTITY_UUID, // the entity/uuid attribute
                 ATTR_IDENT,  // has a attr/ident attribue
-                PLAIN_T,
+                T_PLAIN,
                 "entity/uuid", // of this string
                 ATTR_IDENT,
                 ATTR_IDENT,
-                PLAIN_T,
+                T_PLAIN,
                 "attr/ident",
             ],
         )

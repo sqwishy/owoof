@@ -175,6 +175,24 @@ pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt
     write!(query, "_dtm{}.{}", l.datomset.0, column)
 }
 
+pub fn selection_sql<'q, 'a: 'q, V>(
+    s: &'a matter::Selection<'a, V>,
+    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
+) -> fmt::Result
+where
+    V: Debug + ToSql,
+{
+    let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
+    for l in s.columns() {
+        query.push_str(pre.next().unwrap());
+        // TODO HALP
+        location_sql(l, query)?;
+        query.push_str("\n");
+    }
+
+    projection_sql(s.projection, query)
+}
+
 pub(crate) const fn entity_bind() -> &'static str {
     "(SELECT rowid FROM entities WHERE uuid = ?)"
 }

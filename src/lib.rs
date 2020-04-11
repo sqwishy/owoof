@@ -76,7 +76,7 @@ use std::{
 use anyhow::Context;
 
 pub use dialogue::Pattern;
-pub use matter::Projection;
+pub use matter::{Projection, Selection};
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
@@ -818,10 +818,13 @@ mod tests {
                 .le(matter::Concept::Value(&max_rating)),
         );
 
-        eprintln!("{:#?}", p);
+        let mut s = Selection::new(&p);
+        s.columns.push(p.variable("b").cloned().unwrap());
+
+        eprintln!("{:#?}", s);
 
         let mut q = sql::Query::default();
-        sql::projection_sql(&p, &mut q).unwrap();
+        sql::selection_sql(&s, &mut q).unwrap();
         eprintln!("{}", q);
 
         Ok(())

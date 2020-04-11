@@ -313,13 +313,12 @@ where
     }
 }
 
-// #[derive(Debug)]
-// pub struct Selection<'a, V> {
-//     pub projection: Projection<'a, V>,
-//     // private members prevent destructuring ... :(
-//     pub columns: Vec<Location>,
-// }
-//
+#[derive(Debug)]
+pub struct Selection<'a, V> {
+    pub projection: &'a Projection<'a, V>,
+    pub columns: Vec<Location>,
+}
+
 // impl<'a, V> From<Projection<'a, V>> for Selection<'a, V> {
 //     fn from(projection: Projection<'a, V>) -> Self {
 //         Selection {
@@ -328,9 +327,16 @@ where
 //         }
 //     }
 // }
-//
-// impl<'a, V> Selection<'a, V> {
-//     // fn columns(&self) -> &Vec<Location> {
-//     //     &self.columns
-//     // }
-// }
+
+impl<'a, V> Selection<'a, V> {
+    pub fn new(projection: &'a Projection<'a, V>) -> Self {
+        Selection {
+            projection,
+            columns: vec![],
+        }
+    }
+
+    pub fn columns(&self) -> &Vec<Location> {
+        &self.columns
+    }
+}

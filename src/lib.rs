@@ -72,7 +72,7 @@ use std::{borrow::Cow, fmt, ops::Deref};
 use anyhow::Context;
 
 pub use dialogue::Pattern;
-pub use matter::{Projection, Selection, Where};
+pub use matter::Projection;
 
 pub const SCHEMA: &'static str = include_str!("../schema.sql");
 
@@ -84,21 +84,66 @@ pub const ATTR_IDENT: i64 = -2;
 
 pub const T_PLAIN: i64 = 0;
 pub const T_ENTITY: i64 = -1;
+pub const T_ATTRIBUTE: i64 = -2;
 // pub const T_USER: i64 = 1;
 pub const T_DATETIME: i64 = 1;
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub enum Affinity {
+    Entity,
+    Attribute,
+    Other(u32),
+}
+
+// impl Affinity {
+//     fn t(self) -> i64 {
+//         match self {
+//             Self::Entity => T_ENTITY,
+//             Self::Attribute => 0,
+//             Self::Other(i) => i as i64,
+//         }
+//     }
+// }
+
+pub trait Assertable {
+    fn affinity(&self) -> Affinity;
+}
+
+impl Assertable for EntityName {
+    fn affinity(&self) -> Affinity {
+        Affinity::Entity
+    }
+}
+
+impl<S> Assertable for AttributeName<S> {
+    fn affinity(&self) -> Affinity {
+        Affinity::Entity
+    }
+}
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
 pub struct Session<'tx> {
     tx: &'tx rusqlite::Transaction<'tx>,
 }
 
-pub type AttributeName = str;
-
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub struct EntityName(uuid::Uuid);
 
 impl Deref for EntityName {
     type Target = uuid::Uuid;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct AttributeName<S>(S)
+where
+    S: AsRef<str>;
+
+impl<S> Deref for AttributeName<S> {
+    type Target = S;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -122,7 +167,7 @@ impl Deref for Entity {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Attribute<S> {
     pub name: EntityName,
-    pub ident: S,
+    pub ident: AttributeName<S>,
 }
 
 pub trait Valuable {
@@ -326,7 +371,7 @@ impl<T> Value<T> {
 #[derive(Debug)]
 pub struct Datom<S, T> {
     pub entity: EntityName,
-    pub attribute: S, //&'s str,
+    pub attribute: AttributeName<S>, //&'s str,
     pub value: Value<T>,
 }
 
@@ -386,12 +431,15 @@ impl<'tx> Session<'tx> {
         Ok(Entity { name })
     }
 
-    pub fn new_attribute<'i>(&self, ident: &'i str) -> rusqlite::Result<Attribute<&'i str>> {
+    pub fn new_attribute<S>(&self, ident: S) -> rusqlite::Result<Attribute<S>>
+    where
+        S: AsRef<str>,
+    {
         let e = self.new_entity()?;
         let rowid = self.tx.last_insert_rowid();
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![rowid, ATTR_IDENT, T_PLAIN, ident],
+            rusqlite::params![rowid, ATTR_IDENT, T_ATTRIBUTE, ident.as_ref()],
         )?;
         assert_eq!(n, 1);
         Ok(Attribute {
@@ -400,10 +448,16 @@ impl<'tx> Session<'tx> {
         })
     }
 
-    pub fn assert<T>(&self, e: &EntityName, a: &AttributeName, v: &T) -> rusqlite::Result<()>
+    pub fn assert<T, S>(&self, e: &EntityName, a: &AttributeName<S>, v: &T) -> rusqlite::Result<()>
     where
-        T: Valuable,
+        T: Assertable + rusqlite::ToSql,
     {
+        let (t, bind_str) = match v.affinity() {
+            Affinity::Entity => (T_ENTITY, sql::entity_bind()),
+            Affinity::Attribute => (T_ATTRIBUTE, sql::attribute_bind()),
+            Affinity::Other(t) => (t as i64, "?"),
+        };
+
         let sql = format!(
             r#"
     INSERT INTO datoms (e, a, t, v)
@@ -412,15 +466,15 @@ impl<'tx> Session<'tx> {
                 , ?
                 , {} )
          "#,
-            v.bind_str(),
+            bind_str,
         );
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
-            e.to_sql() as &dyn rusqlite::ToSql,
-            &a as &dyn rusqlite::ToSql,
-            &v.t() as &dyn rusqlite::ToSql,
-            v.to_sql(),
+            e.deref() as &dyn rusqlite::ToSql,
+            a.deref() as &dyn rusqlite::ToSql,
+            &t as &dyn rusqlite::ToSql,
+            v,
         ])?;
         assert_eq!(n, 1);
         Ok(())
@@ -442,17 +496,16 @@ impl<'tx> Session<'tx> {
         rows.collect::<_>()
     }
 
-    fn find<'s, 'p, T>(
+    fn find<'s, S, T>(
         &'s self,
-        top: &'p str,
-        terms: Vec<dialogue::Pattern<'p, T>>,
+        top: S,
+        terms: Vec<dialogue::Pattern<S, T>>,
     ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
     where
         // T: Valuable + fmt::Debug,
         T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
     {
-        let wh = dialogue::Where::from(terms);
-        let p = Projection::of(&wh);
+        let p = Projection::from_patterns(&terms);
         let top = p.variables().get(top).expect("undefined variable?");
 
         let mut query = sql::Query::default();
@@ -675,9 +728,9 @@ mod tests {
                 };
 
                 let e = s.new_entity()?;
-                s.assert(&e, book.ident, book_ref)?;
-                s.assert(&e, user.ident, &rating.user_id)?;
-                s.assert(&e, rank.ident, &rating.rating)?;
+                s.assert(&e, &book.ident, book_ref)?;
+                s.assert(&e, &user.ident, &rating.user_id)?;
+                s.assert(&e, &rank.ident, &rating.rating)?;
             }
         }
 

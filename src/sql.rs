@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Projection, Selection};
+use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Projection};
 
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
@@ -99,8 +99,8 @@ impl<T> GenericQuery<T> {
 // impl <T> Prefixed<T> {
 // }
 
-pub fn projection_sql<'q, 'a: 'q, V>(
-    projection: &'a Projection<V>,
+pub fn projection_sql<'q, 'a: 'q, S, V>(
+    projection: &'a Projection<S, V>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
@@ -173,6 +173,14 @@ pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt
         matter::Field::Value => "v",
     };
     write!(query, "_dtm{}.{}", l.datomset.0, column)
+}
+
+pub(crate) const fn entity_bind() -> &'static str {
+    "(SELECT rowid FROM entities WHERE uuid = ?)"
+}
+
+pub(crate) const fn attribute_bind() -> &'static str {
+    "(SELECT rowid FROM attributes WHERE ident = ?)"
 }
 
 pub struct RowCursor<'a> {

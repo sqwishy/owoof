@@ -7,8 +7,8 @@ use std::{fmt, iter};
 use crate::{AttributeName, EntityName};
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum VariableOr<'a, T> {
-    Variable(&'a str),
+pub enum VariableOr<S, T> {
+    Variable(S),
     Value(T),
 }
 
@@ -17,18 +17,18 @@ pub enum VariableOr<'a, T> {
 /// respectively, rather than the private/internal database ids.
 /// (var|entity, var|attribute, var|value)
 #[derive(Debug)]
-pub struct Pattern<'a, V> {
+pub struct Pattern<S, V> {
     // todo, less borrowy?
-    pub entity: VariableOr<'a, &'a EntityName>,
-    pub attribute: VariableOr<'a, &'a AttributeName>,
-    pub value: VariableOr<'a, V>,
+    pub entity: VariableOr<S, EntityName>,
+    pub attribute: VariableOr<S, AttributeName<S>>,
+    pub value: VariableOr<S, V>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Predicate<'a, V> {
+pub struct Predicate<S, V> {
     pub op: PredicateOp,
-    pub lh: &'a str,
-    pub rh: VariableOr<'a, V>,
+    pub lh: S,
+    pub rh: VariableOr<S, V>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -40,61 +40,11 @@ pub enum PredicateOp {
     Le,
 }
 
-impl<'a, V> Predicate<'a, V> {
-    fn lt(lh: &'a str, rh: VariableOr<'a, V>) -> Self {
+impl<S, V> Predicate<S, V> {
+    fn lt(lh: S, rh: VariableOr<S, V>) -> Self {
         let op = PredicateOp::Lt;
         Predicate { op, lh, rh }
     }
-}
-
-/// TODO this entire type seems stupid. At the very least it should own the data so that a
-/// Projection can borrow from it.
-#[derive(Debug)]
-pub struct Where<'a, V> {
-    pub terms: Vec<Pattern<'a, V>>,
-    pub preds: Vec<Predicate<'a, V>>,
-    pub show: Vec<&'a str>,
-}
-
-impl<'a, V> Default for Where<'a, V> {
-    fn default() -> Self {
-        Where {
-            terms: vec![],
-            preds: vec![],
-            show: vec![],
-        }
-    }
-}
-
-impl<'a, V> From<Vec<Pattern<'a, V>>> for Where<'a, V> {
-    fn from(terms: Vec<Pattern<'a, V>>) -> Self {
-        Where {
-            terms,
-            ..Where::default()
-        }
-    }
-}
-
-impl<'a, V> Where<'a, V> {
-    pub fn such_that<P>(&mut self, preds: P) -> &mut Self
-    where
-        P: iter::IntoIterator<Item = Predicate<'a, V>>,
-    {
-        self.preds.extend(preds.into_iter());
-        self
-    }
-
-    pub fn show<P>(&mut self, vars: P) -> &mut Self
-    where
-        P: iter::IntoIterator<Item = &'a str>,
-    {
-        self.show.extend(vars.into_iter());
-        self
-    }
-}
-
-pub fn query<'a, V>(terms: Vec<Pattern<'a, V>>) -> Where<'a, V> {
-    terms.into()
 }
 
 #[macro_export]

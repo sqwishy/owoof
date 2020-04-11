@@ -46,10 +46,10 @@ pub struct Location {
 
 macro_rules! _constrain_impl {
     ($name:ident) => {
-        pub fn $name<'a, S, V, I>(self, v: I) -> Constraint<'a, S, V>
+        pub fn $name<'a, V, I>(self, v: I) -> Constraint<'a, V>
         where
             V: 'a,
-            I: Into<Concept<'a, S, V>>,
+            I: Into<Concept<'a, V>>,
         {
             Constraint::$name(self, v.into())
         }
@@ -57,10 +57,10 @@ macro_rules! _constrain_impl {
 }
 
 impl Location {
-    fn constrained_to<'a, S, V, I>(self, v: I) -> Constraint<'a, S, V>
+    fn constrained_to<'a, V, I>(self, v: I) -> Constraint<'a, V>
     where
         V: 'a,
-        I: Into<Concept<'a, S, V>>,
+        I: Into<Concept<'a, V>>,
     {
         Constraint::eq(self, v.into())
     }
@@ -105,66 +105,66 @@ pub enum ConstraintOp {
 ///
 /// This typically borrows from Pattern
 #[derive(Debug)]
-pub struct Constraint<'a, S, V> {
+pub struct Constraint<'a, V> {
     pub lh: Location,
     pub op: ConstraintOp,
-    pub rh: Concept<'a, S, V>,
+    pub rh: Concept<'a, V>,
 }
 
 #[derive(Debug)]
-pub enum Concept<'a, S, V> {
+pub enum Concept<'a, V> {
     Location(Location),
     Entity(&'a EntityName),
-    Attribute(&'a AttributeName<S>),
+    Attribute(&'a AttributeName<'a>),
     Value(&'a V),
 }
 
-impl<'a, S, V> Constraint<'a, S, V> {
-    pub fn eq(lh: Location, rh: Concept<'a, S, V>) -> Self {
+impl<'a, V> Constraint<'a, V> {
+    pub fn eq(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Eq;
         Constraint { op, lh, rh }
     }
 
-    pub fn ne(lh: Location, rh: Concept<'a, S, V>) -> Self {
+    pub fn ne(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Ne;
         Constraint { op, lh, rh }
     }
 
-    pub fn gt(lh: Location, rh: Concept<'a, S, V>) -> Self {
+    pub fn gt(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Gt;
         Constraint { op, lh, rh }
     }
 
-    pub fn ge(lh: Location, rh: Concept<'a, S, V>) -> Self {
+    pub fn ge(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Ge;
         Constraint { op, lh, rh }
     }
 
-    pub fn lt(lh: Location, rh: Concept<'a, S, V>) -> Self {
+    pub fn lt(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Lt;
         Constraint { op, lh, rh }
     }
 
-    pub fn le(lh: Location, rh: Concept<'a, S, V>) -> Self {
+    pub fn le(lh: Location, rh: Concept<'a, V>) -> Self {
         let op = ConstraintOp::Le;
         Constraint { op, lh, rh }
     }
 }
 
-impl<'a, S, V> From<Location> for Concept<'a, S, V> {
-    fn from(o: Location) -> Concept<'a, S, V> {
+impl<'a, V> From<Location> for Concept<'a, V> {
+    fn from(o: Location) -> Concept<'a, V> {
         Concept::Location(o)
     }
 }
 
-impl<'a, S, V> From<&'a EntityName> for Concept<'a, S, V> {
-    fn from(o: &'a EntityName) -> Concept<'a, S, V> {
+impl<'a, V> From<&'a EntityName> for Concept<'a, V> {
+    fn from(o: &'a EntityName) -> Concept<'a, V> {
         Concept::Entity(o)
     }
 }
 
-impl<'a, S, V> From<&'a AttributeName<S>> for Concept<'a, S, V> {
-    fn from(o: &'a AttributeName<S>) -> Concept<'a, S, V> {
+impl<'a, V> From<&'a AttributeName<'a>> for Concept<'a, V> {
+    fn from(o: &'a AttributeName<'a>) -> Concept<'a, V> {
         Concept::Attribute(o)
     }
 }
@@ -173,14 +173,14 @@ impl<'a, S, V> From<&'a AttributeName<S>> for Concept<'a, S, V> {
 ///
 /// This references attributes and entities by their handles/public representations.
 #[derive(Debug)]
-pub struct Projection<'a, S, V> {
+pub struct Projection<'a, V> {
     sets: usize,
     /// I believe this only contains the _first_ occurrence of some variable
     variables: HashMap<&'a str, Location>,
-    constraints: Vec<Constraint<'a, S, V>>,
+    constraints: Vec<Constraint<'a, V>>,
 }
 
-impl<'a, S, V> Default for Projection<'a, S, V> {
+impl<'a, V> Default for Projection<'a, V> {
     fn default() -> Self {
         Projection {
             sets: 0usize,
@@ -190,11 +190,11 @@ impl<'a, S, V> Default for Projection<'a, S, V> {
     }
 }
 
-impl<'a, S, V> Projection<'a, S, V>
+impl<'a, V> Projection<'a, V>
 where
     V: Debug,
 {
-    pub fn from_patterns(patterns: &'a Vec<dialogue::Pattern<S, V>>) -> Self {
+    pub fn from_patterns(patterns: &'a Vec<dialogue::Pattern<V>>) -> Self {
         let mut p = Self::default();
         p.add_patterns(patterns);
         p
@@ -221,7 +221,7 @@ where
         &self.variables
     }
 
-    pub fn constraints(&self) -> &Vec<Constraint<'a, S, V>> {
+    pub fn constraints(&self) -> &Vec<Constraint<'a, V>> {
         &self.constraints
     }
 
@@ -246,13 +246,13 @@ where
         }
     }
 
-    pub fn add_patterns(&mut self, patterns: &'a Vec<dialogue::Pattern<S, V>>) {
+    pub fn add_patterns(&mut self, patterns: &'a Vec<dialogue::Pattern<V>>) {
         for pattern in patterns {
             self.add_pattern(pattern);
         }
     }
 
-    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<S, V>) {
+    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<V>) {
         use dialogue::{Pattern, VariableOr};
         match pattern {
             // a :person/name "Spongebob"
@@ -268,7 +268,7 @@ where
 
                 // constrain the attribute ...
                 self.constraints
-                    .push(datomset.attribute_field().constrained_to(*a));
+                    .push(datomset.attribute_field().constrained_to(a));
 
                 // ... and value
                 self.constraints
@@ -288,7 +288,7 @@ where
 
                 // constrain the attribute ...
                 self.constraints
-                    .push(datomset.attribute_field().constrained_to(*a));
+                    .push(datomset.attribute_field().constrained_to(a));
 
                 // ... and the value
                 self.constrain_variable(v, datomset.value_field())
@@ -308,7 +308,7 @@ where
         }
     }
 
-    pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, S, V>) {
+    pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, V>) {
         self.constraints.push(c);
     }
 }

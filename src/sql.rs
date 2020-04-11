@@ -99,8 +99,8 @@ impl<T> GenericQuery<T> {
 // impl <T> Prefixed<T> {
 // }
 
-pub fn projection_sql<'q, 'a: 'q, S, V>(
-    projection: &'a Projection<S, V>,
+pub fn projection_sql<'q, 'a: 'q, V>(
+    projection: &'a Projection<'a, V>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where

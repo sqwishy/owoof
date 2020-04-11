@@ -67,7 +67,11 @@ mod matter;
 mod sql;
 
 use std::collections::HashMap;
-use std::{borrow::Cow, fmt, ops::Deref};
+use std::{
+    borrow::{Borrow, Cow},
+    fmt,
+    ops::Deref,
+};
 
 use anyhow::Context;
 
@@ -86,7 +90,7 @@ pub const T_PLAIN: i64 = 0;
 pub const T_ENTITY: i64 = -1;
 pub const T_ATTRIBUTE: i64 = -2;
 // pub const T_USER: i64 = 1;
-pub const T_DATETIME: i64 = 1;
+// pub const T_DATETIME: i64 = 1;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub enum Affinity {
@@ -115,9 +119,18 @@ impl Assertable for EntityName {
     }
 }
 
-impl<S> Assertable for AttributeName<S> {
+impl<'a> Assertable for AttributeName<'a> {
     fn affinity(&self) -> Affinity {
         Affinity::Entity
+    }
+}
+
+impl<'a, I> Assertable for I
+where
+    I: Into<rusqlite::types::Value>,
+{
+    fn affinity(&self) -> Affinity {
+        Affinity::Other(0)
     }
 }
 
@@ -137,16 +150,36 @@ impl Deref for EntityName {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct AttributeName<S>(S)
-where
-    S: AsRef<str>;
+impl rusqlite::ToSql for EntityName {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+        self.0.to_sql()
+    }
+}
 
-impl<S> Deref for AttributeName<S> {
-    type Target = S;
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct AttributeName<'a>(Cow<'a, str>);
+
+impl<'a> Deref for AttributeName<'a> {
+    type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.borrow()
+    }
+}
+
+impl<'a, I> From<I> for AttributeName<'a>
+where
+    I: Into<Cow<'a, str>>,
+{
+    fn from(i: I) -> Self {
+        let cow: Cow<str> = i.into();
+        AttributeName(cow)
+    }
+}
+
+impl<'a> rusqlite::ToSql for AttributeName<'a> {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+        self.0.to_sql()
     }
 }
 
@@ -165,9 +198,18 @@ impl Deref for Entity {
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct Attribute<S> {
+pub struct Attribute<'a> {
+    // TODO these member names are confusing and awful
     pub name: EntityName,
-    pub ident: AttributeName<S>,
+    pub ident: AttributeName<'a>,
+}
+
+impl<'a> Deref for Attribute<'a> {
+    type Target = AttributeName<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ident
+    }
 }
 
 pub trait Valuable {
@@ -229,59 +271,36 @@ impl Valuable for rusqlite::types::Value {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);
-
-impl<T> Deref for MemeTime<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Valuable for chrono::DateTime<chrono::Utc> {
-    fn t(&self) -> i64 {
-        T_DATETIME
-    }
-
-    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
-        col.into()
-    }
-
-    fn bind_str(&self) -> &'static str {
-        "?"
-    }
-
-    fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
-        &MemeTime(self) as &dyn rusqlite::types::ToSql
-    }
-
-    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
-        &MemeTime(self) as &dyn sql::ToSqlDebug
-    }
-}
-
-impl rusqlite::types::ToSql for MemeTime<&chrono::DateTime<chrono::Utc>> {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        Ok(self.timestamp_millis().into())
-    }
-}
-
-impl rusqlite::types::FromSql for MemeTime<chrono::DateTime<chrono::Utc>> {
-    fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-        use chrono::TimeZone;
-        value.as_i64().and_then(|v| {
-            chrono::Utc
-                .timestamp_millis_opt(v)
-                .single()
-                // I don't think this can happen with UTC?
-                .ok_or_else(|| rusqlite::types::FromSqlError::OutOfRange(v))
-                .map(chrono::DateTime::<chrono::Utc>::from)
-                .map(MemeTime)
-        })
-    }
-}
+// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);
+//
+// impl<T> Deref for MemeTime<T> {
+//     type Target = T;
+//
+//     fn deref(&self) -> &Self::Target {
+//         &self.0
+//     }
+// }
+//
+// impl rusqlite::types::ToSql for MemeTime<&chrono::DateTime<chrono::Utc>> {
+//     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+//         Ok(self.timestamp_millis().into())
+//     }
+// }
+//
+// impl rusqlite::types::FromSql for MemeTime<chrono::DateTime<chrono::Utc>> {
+//     fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
+//         use chrono::TimeZone;
+//         value.as_i64().and_then(|v| {
+//             chrono::Utc
+//                 .timestamp_millis_opt(v)
+//                 .single()
+//                 .ok_or_else(|| rusqlite::types::FromSqlError::OutOfRange(v))
+//                 .map(chrono::DateTime::<chrono::Utc>::from)
+//                 .map(MemeTime)
+//         })
+//     }
+// }
 
 // TODO get rid of the T? this is super annoying?
 #[derive(Clone, PartialEq, Debug)]
@@ -294,7 +313,7 @@ pub enum Value<T> {
     Integer(i64),
     Real(f64),
     Uuid(uuid::Uuid),
-    DateTime(chrono::DateTime<chrono::Utc>),
+    // DateTime(chrono::DateTime<chrono::Utc>),
 }
 
 impl<T> From<Entity> for Value<T> {
@@ -336,13 +355,12 @@ impl<T> Value<T> {
         format!(
             "CASE {}
              WHEN {} THEN {}
-             WHEN {} THEN {}
              ELSE {} END",
             t,
             T_ENTITY,
             EntityName::read_column(v),
-            T_DATETIME,
-            chrono::DateTime::<chrono::Utc>::read_column(v),
+            // T_DATETIME,
+            // chrono::DateTime::<chrono::Utc>::read_column(v),
             rusqlite::types::Value::read_column(v),
         )
         .into()
@@ -369,16 +387,14 @@ impl<T> Value<T> {
 ///
 /// attribute is parameterized as to use a owned or borrowed string TODO this is stupid
 #[derive(Debug)]
-pub struct Datom<S, T> {
+pub struct Datom<'a, T> {
     pub entity: EntityName,
-    pub attribute: AttributeName<S>, //&'s str,
+    pub attribute: AttributeName<'a>, //&'s str,
     pub value: Value<T>,
 }
 
-pub type OwnedDatom<T> = Datom<String, T>;
-
-impl<S, T> Datom<S, T> {
-    pub fn from_eav(entity: EntityName, attribute: S, value: Value<T>) -> Self {
+impl<'a, T> Datom<'a, T> {
+    pub fn from_eav<S>(entity: EntityName, attribute: AttributeName<'a>, value: Value<T>) -> Self {
         Self {
             entity,
             attribute,
@@ -386,32 +402,33 @@ impl<S, T> Datom<S, T> {
         }
     }
 
-    pub fn eav(self) -> (EntityName, S, Value<T>) {
+    pub fn eav(self) -> (EntityName, AttributeName<'a>, Value<T>) {
         (self.entity, self.attribute, self.value)
     }
 
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
-    where
-        S: rusqlite::types::FromSql,
+where
+        // S: rusqlite::types::FromSql,
         // T: rusqlite::types::FromSql,
     {
         Self::from_columns(&mut sql::RowCursor::from(row))
     }
 
     /// Expects a columns in the form of `e a is_ref v`
-    pub fn from_columns<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
-    where
-        S: rusqlite::types::FromSql,
+    pub fn from_columns<'c>(c: &mut sql::RowCursor<'c>) -> rusqlite::Result<Self>
+where
+        // S: rusqlite::types::FromSql,
         // T: rusqlite::types::FromSql,
     {
         let e = EntityName(c.get()?);
-        let a = c.get()?;
+        let a = AttributeName(c.get::<String>()?.into());
         let v = match c.get()? {
             T_ENTITY => Value::Entity(EntityName(c.get()?)),
-            T_DATETIME => Value::DateTime(c.get()?),
+            // T_DATETIME => Value::DateTime(c.get()?),
             _ => Value::from(c.get::<rusqlite::types::Value>()?),
         };
-        Ok(Datom::from_eav(e, a, v))
+        todo!()
+        // Ok(Datom::from_eav(e, a, v))
     }
 }
 
@@ -431,24 +448,28 @@ impl<'tx> Session<'tx> {
         Ok(Entity { name })
     }
 
-    pub fn new_attribute<S>(&self, ident: S) -> rusqlite::Result<Attribute<S>>
+    pub fn new_attribute<'a, S>(&self, ident: S) -> rusqlite::Result<Attribute<'a>>
     where
-        S: AsRef<str>,
+        S: Into<AttributeName<'a>>,
     {
+        let ident = ident.into();
+
         let e = self.new_entity()?;
         let rowid = self.tx.last_insert_rowid();
+
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![rowid, ATTR_IDENT, T_ATTRIBUTE, ident.as_ref()],
+            rusqlite::params![rowid, ATTR_IDENT, T_ATTRIBUTE, &*ident],
         )?;
         assert_eq!(n, 1);
+
         Ok(Attribute {
             name: e.name,
             ident,
         })
     }
 
-    pub fn assert<T, S>(&self, e: &EntityName, a: &AttributeName<S>, v: &T) -> rusqlite::Result<()>
+    pub fn assert<T>(&self, e: &EntityName, a: &AttributeName<'_>, v: &T) -> rusqlite::Result<()>
     where
         T: Assertable + rusqlite::ToSql,
     {
@@ -471,8 +492,8 @@ impl<'tx> Session<'tx> {
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
-            e.deref() as &dyn rusqlite::ToSql,
-            a.deref() as &dyn rusqlite::ToSql,
+            &e.deref() as &dyn rusqlite::ToSql,
+            &a.deref() as &dyn rusqlite::ToSql,
             &t as &dyn rusqlite::ToSql,
             v,
         ])?;
@@ -481,7 +502,7 @@ impl<'tx> Session<'tx> {
     }
 
     /// for debugging ... use with T as rusqlite::types::Value
-    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<OwnedDatom<T>>>
+    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<T>>>
     where
         T: rusqlite::types::FromSql,
     {
@@ -496,10 +517,10 @@ impl<'tx> Session<'tx> {
         rows.collect::<_>()
     }
 
-    fn find<'s, S, T>(
-        &'s self,
-        top: S,
-        terms: Vec<dialogue::Pattern<S, T>>,
+    fn find<T>(
+        &self,
+        top: &str,
+        terms: Vec<dialogue::Pattern<'_, T>>,
     ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
     where
         // T: Valuable + fmt::Debug,
@@ -535,7 +556,7 @@ impl<'tx> Session<'tx> {
                 "{}{}\n",
                 pre.next().unwrap(),
                 Value::<T>::read_t_v_sql(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n),),
-            );
+            )?;
         }
 
         // add FROM and WHERE clause to query
@@ -553,23 +574,23 @@ impl<'tx> Session<'tx> {
             let mut c = sql::RowCursor::from(row);
             (0..p.datomsets())
                 .map(|_| Datom::from_columns(&mut c))
-                .collect::<rusqlite::Result<Vec<OwnedDatom<_>>>>()
+                .collect::<rusqlite::Result<Vec<Datom<'_, _>>>>()
         })?;
 
         weird_grouping(top, rows)
     }
 }
 
-fn weird_grouping<T, I>(
+fn weird_grouping<'a, T, I>(
     top: &matter::Location,
     rows: I,
 ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
 where
     T: fmt::Debug,
-    I: Iterator<Item = rusqlite::Result<Vec<OwnedDatom<T>>>>,
+    I: Iterator<Item = rusqlite::Result<Vec<Datom<'a, T>>>>,
 {
     rows.map(|datoms| {
-        let datoms: Vec<OwnedDatom<T>> = datoms?;
+        let datoms: Vec<Datom<'_, T>> = datoms?;
         // group datoms from each row by entity
         let mut by_ent: HashMap<EntityName, HashMap<String, Value<T>>> = HashMap::new();
         // later return the entity for the `top` variable
@@ -592,12 +613,12 @@ where
 
             match by_ent.get_mut(&entity) {
                 Some(map) => {
-                    map.insert(attribute, value);
+                    map.insert(attribute.to_string(), value);
                 }
                 None => {
                     // map.insert("entity/uuid".to_owned(), Value::Entity(entity));
                     let mut map: HashMap<String, Value<T>> = HashMap::new();
-                    map.insert(attribute, value);
+                    map.insert(attribute.to_string(), value);
                     by_ent.insert(entity, map);
                 }
             }
@@ -703,10 +724,10 @@ mod tests {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
-                s.assert(&e, title.ident, &book.title)?;
-                s.assert(&e, avg_rating.ident, &book.average_rating)?;
-                s.assert(&e, isbn.ident, &book.isbn)?;
-                s.assert(&e, authors.ident, &book.authors)?;
+                s.assert(&e, &title.ident, &book.title)?;
+                s.assert(&e, &avg_rating.ident, &book.average_rating)?;
+                s.assert(&e, &isbn.ident, &book.isbn)?;
+                s.assert(&e, &authors.ident, &book.authors)?;
 
                 books.insert(book.book_id, e.name);
             }

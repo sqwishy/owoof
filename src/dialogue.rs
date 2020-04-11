@@ -2,7 +2,7 @@
 //!
 //! TODO move this into matter? this is projection stuff?
 
-use std::{fmt, iter};
+use std::{borrow::Cow, fmt, iter};
 
 use crate::{AttributeName, EntityName};
 
@@ -17,11 +17,10 @@ pub enum VariableOr<S, T> {
 /// respectively, rather than the private/internal database ids.
 /// (var|entity, var|attribute, var|value)
 #[derive(Debug)]
-pub struct Pattern<S, V> {
-    // todo, less borrowy?
-    pub entity: VariableOr<S, EntityName>,
-    pub attribute: VariableOr<S, AttributeName<S>>,
-    pub value: VariableOr<S, V>,
+pub struct Pattern<'a, V> {
+    pub entity: VariableOr<Cow<'a, str>, EntityName>,
+    pub attribute: VariableOr<Cow<'a, str>, AttributeName<'a>>,
+    pub value: VariableOr<Cow<'a, str>, V>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -64,7 +63,7 @@ macro_rules! pat {
         }
     }};
     (:var $v:ident) => {
-        $crate::dialogue::VariableOr::Variable(stringify!($v))
+        $crate::dialogue::VariableOr::Variable(stringify!($v).into())
     };
     (:val $v:tt) => {
         $crate::dialogue::VariableOr::Value($v.into())
@@ -91,7 +90,7 @@ macro_rules! prd {
         $crate::dialogue::PredicateOp::Lt
     };
     (:var $v:ident) => {
-        $crate::dialogue::VariableOr::Variable(stringify!($v))
+        $crate::dialogue::VariableOr::Variable(stringify!($v).into())
     };
     (:val $v:tt) => {
         $crate::dialogue::VariableOr::Value($v.into())

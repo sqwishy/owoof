@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Projection};
+use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
 
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
@@ -169,11 +169,20 @@ where
 /// Write the sql result column expression for the given Location
 pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt::Result {
     let column = match l.field {
-        matter::Field::Entity => "e",
-        matter::Field::Attribute => "a",
-        matter::Field::Value => "v",
+        Field::Entity => "e",
+        Field::Attribute => "a",
+        Field::Value => "v",
     };
     write!(query, "_dtm{}.{}", l.datomset.0, column)
+}
+
+pub fn location(l: &matter::Location) -> String {
+    let column = match l.field {
+        Field::Entity => "e",
+        Field::Attribute => "a",
+        Field::Value => "v",
+    };
+    format!("_dtm{}.{}", l.datomset.0, column)
 }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
@@ -186,8 +195,16 @@ where
     let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
     for l in s.columns() {
         query.push_str(pre.next().unwrap());
-        // TODO HALP
-        location_sql(l, query)?;
+        let col_str = match l.field {
+            Field::Entity => read_entity(&location(l)),
+            Field::Attribute => read_attribute(&location(l)),
+            Field::Value => read_v(
+                // TODO is this cheating?
+                &format!("_dtm{}.t", l.datomset.0),
+                &location(l),
+            ),
+        };
+        query.push_str(&col_str);
         query.push_str("\n");
     }
 

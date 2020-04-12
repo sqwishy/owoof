@@ -38,6 +38,8 @@ pub enum Field {
 /// A column of a datom-set.
 ///
 /// This name is terrible ... call it DatomsColumn? Or something?
+///
+/// The [DatomSet] has constructors for this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Location {
     pub datomset: DatomSet,

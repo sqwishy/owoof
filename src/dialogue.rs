@@ -23,29 +23,6 @@ pub struct Pattern<'a, V> {
     pub value: VariableOr<Cow<'a, str>, V>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Predicate<S, V> {
-    pub op: PredicateOp,
-    pub lh: S,
-    pub rh: VariableOr<S, V>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum PredicateOp {
-    Eq,
-    Gt,
-    Ge,
-    Lt,
-    Le,
-}
-
-impl<S, V> Predicate<S, V> {
-    fn lt(lh: S, rh: VariableOr<S, V>) -> Self {
-        let op = PredicateOp::Lt;
-        Predicate { op, lh, rh }
-    }
-}
-
 #[macro_export]
 macro_rules! pat {
     (?$e:ident $a:tt ?$v:ident) => {{
@@ -62,33 +39,6 @@ macro_rules! pat {
             value: pat!(:val $v),
         }
     }};
-    (:var $v:ident) => {
-        $crate::dialogue::VariableOr::Variable(stringify!($v).into())
-    };
-    (:val $v:tt) => {
-        $crate::dialogue::VariableOr::Value($v.into())
-    };
-}
-
-#[macro_export]
-macro_rules! prd {
-    (?$e:ident $o:tt ?$v:ident) => {{
-       $crate::dialogue::Predicate {
-           op: prd!(:op $o),
-           lh: stringify!($e),
-           rh: prd!(:var $v),
-        }
-    }};
-    (?$e:ident $o:tt $v:tt) => {{
-       $crate::dialogue::Predicate {
-           op: prd!(:op $o),
-           lh: stringify!($e),
-           rh: prd!(:val $v),
-        }
-    }};
-    (:op <) => {
-        $crate::dialogue::PredicateOp::Lt
-    };
     (:var $v:ident) => {
         $crate::dialogue::VariableOr::Variable(stringify!($v).into())
     };

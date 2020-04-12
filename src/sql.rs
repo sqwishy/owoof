@@ -45,6 +45,12 @@ impl<T> DerefMut for GenericQuery<T> {
     }
 }
 
+impl<T> Write for GenericQuery<T> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.string.write_str(s)
+    }
+}
+
 // todo; implement From for all ToString?
 
 impl<T> From<String> for GenericQuery<T> {
@@ -167,7 +173,7 @@ where
 }
 
 /// Write the sql result column expression for the given Location
-pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt::Result {
+pub fn location_sql<W: Write>(l: &matter::Location, query: &mut W) -> fmt::Result {
     let column = match l.field {
         Field::Entity => "e",
         Field::Attribute => "a",
@@ -177,12 +183,9 @@ pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt
 }
 
 pub fn location(l: &matter::Location) -> String {
-    let column = match l.field {
-        Field::Entity => "e",
-        Field::Attribute => "a",
-        Field::Value => "v",
-    };
-    format!("_dtm{}.{}", l.datomset.0, column)
+    let mut s = String::new();
+    let _ = location_sql(l, &mut s);
+    s
 }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
@@ -213,16 +216,16 @@ where
 
 pub(crate) fn read_v(t_col: &str, v_col: &str) -> String {
     format!(
-        "CASE {}
-         WHEN {} THEN {}
-         WHEN {} THEN {}
-         ELSE {} END",
-        t_col,
-        crate::T_ENTITY,
-        read_entity(v_col),
-        crate::T_ATTRIBUTE,
-        read_attribute(v_col),
-        v_col,
+        "CASE {t}
+         WHEN {t_ent} THEN {rd_ent}
+         WHEN {t_atr} THEN {rd_atr}
+         ELSE {v} END",
+        t = t_col,
+        t_ent = crate::T_ENTITY,
+        rd_ent = read_entity(v_col),
+        t_atr = crate::T_ATTRIBUTE,
+        rd_atr = read_attribute(v_col),
+        v = v_col,
     )
 }
 

@@ -73,6 +73,8 @@ use std::{
     ops::Deref,
 };
 
+use rusqlite::types::Value as SqlValue;
+
 use anyhow::Context;
 
 pub use dialogue::Pattern;
@@ -97,16 +99,17 @@ pub enum Affinity {
     Other(u32),
 }
 
-// impl Affinity {
-//     fn t(self) -> i64 {
-//         match self {
-//             Self::Entity => T_ENTITY,
-//             Self::Attribute => 0,
-//             Self::Other(i) => i as i64,
-//         }
-//     }
-// }
+impl Affinity {
+    fn t_and_bind(&self) -> (i64, &'static str) {
+        match self {
+            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
+            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
+            Affinity::Other(t) => (*t as i64, "?"),
+        }
+    }
+}
 
+/// Has an affinity ... TODO rename this
 pub trait Assertable {
     fn affinity(&self) -> Affinity;
 }
@@ -305,12 +308,13 @@ impl Valuable for rusqlite::types::Value {
 pub enum Value<T> {
     AsIs(T),
     Entity(EntityName),
+    // Attribute(AttributeName),
     Null,
     Text(String),
     Blob(Vec<u8>),
     Integer(i64),
     Real(f64),
-    Uuid(uuid::Uuid),
+    // Uuid(uuid::Uuid),
     // DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -458,11 +462,7 @@ impl<'tx> Session<'tx> {
     where
         T: Assertable + rusqlite::ToSql,
     {
-        let (t, bind_str) = match v.affinity() {
-            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
-            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
-            Affinity::Other(t) => (t as i64, "?"),
-        };
+        let (t, bind_str) = v.affinity().t_and_bind();
 
         let sql = format!(
             r#"
@@ -500,6 +500,32 @@ impl<'tx> Session<'tx> {
         let mut stmt = self.tx.prepare(sql)?;
         let rows = stmt.query_map(rusqlite::NO_PARAMS, Datom::from_row)?;
         rows.collect::<_>()
+    }
+
+    fn select(
+        &self,
+        s: &Selection<rusqlite::types::Value>,
+    ) -> rusqlite::Result<Vec<Vec<Value<rusqlite::types::Value>>>> {
+        let mut q = sql::Query::default();
+        let _ = sql::selection_sql(&s, &mut q);
+
+        let mut stmt = self.tx.prepare(q.as_str())?;
+
+        let rows = stmt.query_map(q.params(), |row| {
+            let mut c = sql::RowCursor::from(row);
+            s.columns()
+                .iter()
+                .map(|loc| -> rusqlite::Result<Value<_>> {
+                    Ok(match loc.field {
+                        matter::Field::Entity => Value::Entity(EntityName(c.get()?)),
+                        matter::Field::Attribute => todo!(), // Value::Attribute(AttributeName(c.get()?)),
+                        matter::Field::Value => Value::from(c.get::<rusqlite::types::Value>()?),
+                    })
+                })
+                .collect::<rusqlite::Result<Vec<Value<rusqlite::types::Value>>>>()
+        })?;
+
+        rows.collect()
     }
 
     fn find<T>(
@@ -764,7 +790,7 @@ mod tests {
     fn wow() -> Result<()> {
         let mut db = goodbooks()?;
         let tx = db.transaction()?;
-        let s = Session::new(&tx);
+        let sess = Session::new(&tx);
 
         // eprintln!(
         //     "all datoms: {:#?}",
@@ -815,6 +841,9 @@ mod tests {
         let mut q = sql::Query::default();
         sql::selection_sql(&s, &mut q).unwrap();
         eprintln!("{}", q);
+
+        let wow = sess.select(&s);
+        eprintln!("{:#?}", wow);
 
         Ok(())
     }

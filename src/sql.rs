@@ -201,6 +201,7 @@ where
         let col_str = match l.field {
             Field::Entity => read_entity(&location(l)),
             Field::Attribute => read_attribute(&location(l)),
+            // TODO read the T/affinity field also?
             Field::Value => read_v(
                 // TODO is this cheating?
                 &format!("_dtm{}.t", l.datomset.0),
@@ -211,7 +212,14 @@ where
         query.push_str("\n");
     }
 
-    projection_sql(s.projection, query)
+    projection_sql(s.projection, query)?;
+
+    if s.limit > 0 {
+        query.push_str(" LIMIT ?\n");
+        query.add_param(&s.limit as &dyn ToSqlDebug);
+    }
+
+    Ok(())
 }
 
 pub(crate) fn read_v(t_col: &str, v_col: &str) -> String {
@@ -230,11 +238,11 @@ pub(crate) fn read_v(t_col: &str, v_col: &str) -> String {
 }
 
 pub(crate) const fn bind_entity() -> &'static str {
-    "(SELECT rowid FROM entities WHERE uuid = ?)"
+    "(SELECT rowid FROM entities   WHERE uuid = ?)"
 }
 
 pub(crate) fn read_entity(col: &str) -> String {
-    format!("(SELECT uuid FROM entities WHERE rowid = {})", col).into()
+    format!("(SELECT uuid  FROM entities   WHERE rowid = {})", col).into()
 }
 
 pub(crate) const fn bind_attribute() -> &'static str {

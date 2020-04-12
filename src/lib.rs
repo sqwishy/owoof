@@ -824,7 +824,7 @@ mod tests {
         ];
         p.add_patterns(&pats);
 
-        let max_rating = 1.into();
+        let max_rating = 4.0.into();
         p.add_constraint(
             p.variable("v")
                 .cloned()
@@ -835,12 +835,15 @@ mod tests {
         let mut s = Selection::new(&p);
         s.columns.push(p.variable("b").cloned().unwrap());
         s.columns.push(p.variable("t").cloned().unwrap());
+        s.columns.push(p.variable("v").cloned().unwrap());
+        s.limit = 8;
 
         eprintln!("{:#?}", s);
 
         let mut q = sql::Query::default();
         sql::selection_sql(&s, &mut q).unwrap();
         eprintln!("{}", q);
+        eprintln!("{:?}", q.params());
 
         let wow = sess.select(&s);
         eprintln!("{:#?}", wow);

@@ -319,6 +319,7 @@ where
 pub struct Selection<'a, V> {
     pub projection: &'a Projection<'a, V>,
     pub columns: Vec<Location>,
+    pub limit: i64,
 }
 
 // impl<'a, V> From<Projection<'a, V>> for Selection<'a, V> {
@@ -335,10 +336,15 @@ impl<'a, V> Selection<'a, V> {
         Selection {
             projection,
             columns: vec![],
+            limit: 0,
         }
     }
 
     pub fn columns(&self) -> &Vec<Location> {
         &self.columns
+    }
+
+    pub fn limit(&self) -> i64 {
+        self.limit
     }
 }

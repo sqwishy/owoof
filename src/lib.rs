@@ -78,19 +78,17 @@ use anyhow::Context;
 pub use dialogue::Pattern;
 pub use matter::{Projection, Selection};
 
-pub const SCHEMA: &'static str = include_str!("../schema.sql");
+pub(crate) const SCHEMA: &'static str = include_str!("../schema.sql");
 
 /// Hard coded entity row ID for attribute of the identifier "entity/uuid" ...
-pub const ENTITY_UUID: i64 = -1;
+pub(crate) const ENTITY_UUID: i64 = -1;
 /// Hard coded entity row ID for attribute of the identifier "attr/ident" ...
 /// This is referenced _literally_ in the "attributes" database view.
-pub const ATTR_IDENT: i64 = -2;
+pub(crate) const ATTR_IDENT: i64 = -2;
 
-pub const T_PLAIN: i64 = 0;
-pub const T_ENTITY: i64 = -1;
-pub const T_ATTRIBUTE: i64 = -2;
-// pub const T_USER: i64 = 1;
-// pub const T_DATETIME: i64 = 1;
+pub(crate) const T_PLAIN: i64 = 0;
+pub(crate) const T_ENTITY: i64 = -1;
+pub(crate) const T_ATTRIBUTE: i64 = -2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub enum Affinity {
@@ -349,21 +347,8 @@ impl<T> Value<T> {
     //     }
     // }
 
-    fn read_t_v_sql<'s>(t: &'s str, v: &'s str) -> Cow<'s, str> {
-        // TODO it's super dumb to support this extravagant mapping all over the place, it's
-        // uniquely useful for attributes and entities
-        format!(
-            "CASE {}
-             WHEN {} THEN {}
-             ELSE {} END",
-            t,
-            T_ENTITY,
-            EntityName::read_column(v),
-            // T_DATETIME,
-            // chrono::DateTime::<chrono::Utc>::read_column(v),
-            rusqlite::types::Value::read_column(v),
-        )
-        .into()
+    fn read_t_v_sql<'s>(t_col: &'s str, v_col: &'s str) -> Cow<'s, str> {
+        sql::read_v(t_col, v_col).into()
     }
 
     // fn bind_str(&self) -> &'static str {
@@ -474,8 +459,8 @@ impl<'tx> Session<'tx> {
         T: Assertable + rusqlite::ToSql,
     {
         let (t, bind_str) = match v.affinity() {
-            Affinity::Entity => (T_ENTITY, sql::entity_bind()),
-            Affinity::Attribute => (T_ATTRIBUTE, sql::attribute_bind()),
+            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
+            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
             Affinity::Other(t) => (t as i64, "?"),
         };
 
@@ -680,13 +665,13 @@ mod tests {
                   VALUES (?, ?, ?, ?)
                        , (?, ?, ?, ?)",
             rusqlite::params![
-                ENTITY_UUID, // the entity/uuid attribute
+                ENTITY_UUID, // the entity/uuid attribute's rowid
                 ATTR_IDENT,  // has a attr/ident attribue
-                T_PLAIN,
+                T_ATTRIBUTE,
                 "entity/uuid", // of this string
                 ATTR_IDENT,
                 ATTR_IDENT,
-                T_PLAIN,
+                T_ATTRIBUTE,
                 "attr/ident",
             ],
         )
@@ -806,11 +791,14 @@ mod tests {
 
         let mut p = Projection::<rusqlite::types::Value>::default();
 
-        let pats = vec![pat!(?b "book/title" ?t), pat!(?b "book/avg_rating" ?v)];
-        let max_rating = 1.into();
-
+        let pats = vec![
+            pat!(?b "book/title" ?t),
+            pat!(?b "book/avg_rating" ?v),
+            // pat!(?r "rating/book" ?b),
+        ];
         p.add_patterns(&pats);
 
+        let max_rating = 1.into();
         p.add_constraint(
             p.variable("v")
                 .cloned()
@@ -820,6 +808,7 @@ mod tests {
 
         let mut s = Selection::new(&p);
         s.columns.push(p.variable("b").cloned().unwrap());
+        s.columns.push(p.variable("t").cloned().unwrap());
 
         eprintln!("{:#?}", s);
 

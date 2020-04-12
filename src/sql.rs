@@ -166,6 +166,7 @@ where
     Ok(())
 }
 
+/// Write the sql result column expression for the given Location
 pub fn location_sql<T>(l: &matter::Location, query: &mut GenericQuery<T>) -> fmt::Result {
     let column = match l.field {
         matter::Field::Entity => "e",
@@ -193,12 +194,35 @@ where
     projection_sql(s.projection, query)
 }
 
-pub(crate) const fn entity_bind() -> &'static str {
+pub(crate) fn read_v(t_col: &str, v_col: &str) -> String {
+    format!(
+        "CASE {}
+         WHEN {} THEN {}
+         WHEN {} THEN {}
+         ELSE {} END",
+        t_col,
+        crate::T_ENTITY,
+        read_entity(v_col),
+        crate::T_ATTRIBUTE,
+        read_attribute(v_col),
+        v_col,
+    )
+}
+
+pub(crate) const fn bind_entity() -> &'static str {
     "(SELECT rowid FROM entities WHERE uuid = ?)"
 }
 
-pub(crate) const fn attribute_bind() -> &'static str {
+pub(crate) fn read_entity(col: &str) -> String {
+    format!("(SELECT uuid FROM entities WHERE rowid = {})", col).into()
+}
+
+pub(crate) const fn bind_attribute() -> &'static str {
     "(SELECT rowid FROM attributes WHERE ident = ?)"
+}
+
+pub(crate) fn read_attribute(col: &str) -> String {
+    format!("(SELECT ident FROM attributes WHERE rowid = {})", col).into()
 }
 
 pub struct RowCursor<'a> {

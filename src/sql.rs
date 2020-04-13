@@ -84,10 +84,6 @@ impl GenericQuery<&dyn ToSqlDebug> {
 }
 
 impl<T> GenericQuery<T> {
-    // pub fn aliased_datomset(&mut self, n: DatomSet) -> fmt::Result {
-    //     write!(self, "_d{}\n", n.0)
-    // }
-
     pub fn add_param(&mut self, p: T) {
         self.params.push(p)
     }
@@ -97,13 +93,6 @@ impl<T> GenericQuery<T> {
         self
     }
 }
-
-// struct<T> Prefixed {
-//     q: GenericQuery<T>
-// }
-//
-// impl <T> Prefixed<T> {
-// }
 
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<'a, V>,
@@ -152,12 +141,11 @@ where
             }
             Concept::Entity(ent) => {
                 use crate::Valuable;
-                let bind_str = <crate::EntityName as Valuable>::bind_str(ent);
-                query.push_str(bind_str);
+                query.push_str(bind_entity());
                 query.add_param(ent.to_sql_dbg() as &dyn ToSqlDebug);
             }
             Concept::Attribute(handle) => {
-                query.push_str("(SELECT a.rowid FROM attributes a WHERE a.ident = ?)");
+                query.push_str(bind_attribute());
                 query.add_param(handle as &dyn ToSqlDebug);
             }
             Concept::Value(v) => {

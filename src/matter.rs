@@ -215,6 +215,10 @@ where
     //     })
     // }
 
+    // pub fn datomsets(&self) -> impl Iterator<Item = DatomSet> {
+    //     (0..self.sets).map(DatomSet)
+    // }
+
     pub fn datomsets(&self) -> usize {
         self.sets
     }

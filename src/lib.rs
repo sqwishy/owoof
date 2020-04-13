@@ -215,8 +215,6 @@ impl<'a> Deref for Attribute<'a> {
 
 pub trait Valuable {
     fn t(&self) -> i64;
-    fn read_column<'s>(col: &'s str) -> Cow<'s, str>;
-    fn bind_str(&self) -> &'static str;
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql;
     fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug;
     // fn from_sql(t: i64, v: rusqlite::types::ValueRef) -> Result<Self, ValueError>
@@ -232,14 +230,6 @@ impl Valuable for EntityName {
         T_ENTITY
     }
 
-    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
-        format!("(SELECT uuid FROM entities WHERE rowid = {})", col).into()
-    }
-
-    fn bind_str(&self) -> &'static str {
-        "(SELECT rowid FROM entities WHERE uuid = ?)"
-    }
-
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
         &self.0
     }
@@ -253,14 +243,6 @@ impl Valuable for EntityName {
 impl Valuable for rusqlite::types::Value {
     fn t(&self) -> i64 {
         T_PLAIN
-    }
-
-    fn read_column<'s>(col: &'s str) -> Cow<'s, str> {
-        col.into()
-    }
-
-    fn bind_str(&self) -> &'static str {
-        "?"
     }
 
     fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
@@ -542,6 +524,10 @@ impl<'tx> Session<'tx> {
 
         let mut query = sql::Query::default();
 
+        // This is mostly dead code, but it sort of fetched all the datoms in all the datomsets
+        // that were involved in the projection and selected them. But maybe this should use a
+        // Selection object instead? Or maybe we don't support this at all?
+
         let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
         for n in 0..p.datomsets() {
             use std::fmt::Write;
@@ -549,16 +535,16 @@ impl<'tx> Session<'tx> {
             // if that will fuck up the query but lets just not do that at all ever anyway.
             write!(
                 query,
-                "{}{} -- {}\n",
-                pre.next().unwrap(),
-                EntityName::read_column(&format!("_dtm{}.e", n)),
-                n,
+                "{pre}{read_ent} -- {comment}\n",
+                pre = pre.next().unwrap(),
+                read_ent = sql::read_entity(&format!("_dtm{}.e", n)),
+                comment = n,
             )?;
             write!(
                 query,
-                "{}(SELECT ident FROM attributes WHERE rowid = _dtm{}.a)\n",
-                pre.next().unwrap(),
-                n,
+                "{pre}{read_atr}\n",
+                pre = pre.next().unwrap(),
+                read_atr = sql::read_attribute(&format!("_dtm{}.a", n)),
             )?;
             write!(query, "{}_dtm{}.t\n", pre.next().unwrap(), n)?;
             // TODO this is horribly wrong
@@ -726,7 +712,7 @@ mod tests {
 
         {
             let title = s.new_attribute("book/title")?;
-            let avg_rating = s.new_attribute("book/avg_rating")?;
+            let avg_rating = s.new_attribute("book/avg-rating")?;
             let isbn = s.new_attribute("book/isbn")?;
             let authors = s.new_attribute("book/authors")?;
 
@@ -799,7 +785,7 @@ mod tests {
 
         // let mut f = Where::<rusqlite::types::Value>::from(vec![
         //     pat!(?b "book/title" ?t),
-        //     pat!(?b "book/avg_rating" ?v),
+        //     pat!(?b "book/avg-rating" ?v),
         //     pat!(?r "rating/book" ?b),
         //     pat!(?r "rating/user" ?u),
         //     pat!(?r "rating/rank" ?k),
@@ -808,7 +794,7 @@ mod tests {
 
         // let mut q = dialogue::query::<rusqlite::types::Value>(vec![
         //     pat!(?b "book/title" ?t),
-        //     pat!(?b "book/avg_rating" ?v),
+        //     pat!(?b "book/avg-rating" ?v),
         // ]);
         // q.such_that(vec![prd!(?v < 1)]);
         // q.show(vec!["t"]);
@@ -819,7 +805,7 @@ mod tests {
 
         let pats = vec![
             pat!(?b "book/title" ?t),
-            pat!(?b "book/avg_rating" ?v),
+            pat!(?b "book/avg-rating" ?v),
             // pat!(?r "rating/book" ?b),
         ];
         p.add_patterns(&pats);

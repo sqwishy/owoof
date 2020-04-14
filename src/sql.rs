@@ -32,6 +32,7 @@ impl<T: ToSql + Debug> ToSqlDebug for T {}
 #[derive(Debug)]
 pub struct GenericQuery<T> {
     string: String,
+    /// TODO limit this somehow because sqlite max params is like 999
     params: Vec<T>,
 }
 

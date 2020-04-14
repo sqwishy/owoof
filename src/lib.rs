@@ -141,7 +141,7 @@ impl<'a> rusqlite::ToSql for AttributeName<'a> {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
-    // pub rowid: i64, todo why?
+    pub rowid: i64,
     pub name: EntityName,
 }
 
@@ -155,8 +155,8 @@ impl Deref for Entity {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Attribute<'a> {
-    // TODO these member names are confusing and awful
-    pub name: EntityName,
+    pub rowid: i64,
+    pub entity: Entity,
     pub ident: AttributeName<'a>,
 }
 
@@ -334,6 +334,7 @@ impl<'tx> Session<'tx> {
     }
 
     pub fn new_entity(&self) -> rusqlite::Result<Entity> {
+        // TODO should this create a entity/uuid datom to itself???
         let uuid = uuid::Uuid::new_v4();
         let n = self.tx.execute(
             "INSERT INTO entities (uuid) VALUES (?)",
@@ -341,7 +342,8 @@ impl<'tx> Session<'tx> {
         )?;
         assert_eq!(n, 1);
         let name = EntityName(uuid);
-        Ok(Entity { name })
+        let rowid = self.tx.last_insert_rowid();
+        Ok(Entity { rowid, name })
     }
 
     pub fn new_attribute<'a, S>(&self, ident: S) -> rusqlite::Result<Attribute<'a>>
@@ -350,17 +352,18 @@ impl<'tx> Session<'tx> {
     {
         let ident = ident.into();
 
-        let e = self.new_entity()?;
-        let rowid = self.tx.last_insert_rowid();
+        let entity = self.new_entity()?;
 
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &*ident],
+            rusqlite::params![entity.rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &*ident],
         )?;
         assert_eq!(n, 1);
 
+        let rowid = self.tx.last_insert_rowid();
         Ok(Attribute {
-            name: e.name,
+            rowid,
+            entity,
             ident,
         })
     }
@@ -509,7 +512,7 @@ mod tests {
             let authors = s.new_attribute("book/authors")?;
 
             let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
-            for result in r.deserialize().take(1000) {
+            for result in r.deserialize().take(2000) {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
@@ -528,7 +531,7 @@ mod tests {
             let user = s.new_attribute("rating/user")?;
 
             let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(2500) {
+            for result in r.deserialize().take(5000) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -567,6 +570,7 @@ mod tests {
     #[test]
     fn wow() -> Result<()> {
         let mut db = goodbooks()?;
+        return Ok(());
         let tx = db.transaction()?;
         let sess = Session::new(&tx);
 
@@ -574,24 +578,6 @@ mod tests {
         //     "all datoms: {:#?}",
         //     s.all_datoms::<rusqlite::types::Value>()
         // );
-
-        // let mut f = Where::<rusqlite::types::Value>::from(vec![
-        //     pat!(?b "book/title" ?t),
-        //     pat!(?b "book/avg-rating" ?v),
-        //     pat!(?r "rating/book" ?b),
-        //     pat!(?r "rating/user" ?u),
-        //     pat!(?r "rating/rank" ?k),
-        // ]);
-        // f.preds.push(prd!(?v < 1));
-
-        // let mut q = dialogue::query::<rusqlite::types::Value>(vec![
-        //     pat!(?b "book/title" ?t),
-        //     pat!(?b "book/avg-rating" ?v),
-        // ]);
-        // q.such_that(vec![prd!(?v < 1)]);
-        // q.show(vec!["t"]);
-
-        // eprintln!("{:#?}", q);
 
         let patterns = vec![
             // pat!(?r "rating/book" ?b),
@@ -611,6 +597,7 @@ mod tests {
 
         // let book = p.variable("b").cloned().unwrap();
         let attrs = vec![
+            "entity/uuid".into(),
             "book/title".into(),
             "book/isbn".into(),
             "book/avg-rating".into(),

@@ -403,8 +403,6 @@ where
         let map = attrs
             .into_iter()
             .map(|attr| {
-                eprintln!("wow {:?}", attr);
-
                 // Search the datomsets for top for one that is constrained to the attribute...
                 let exists: Option<DatomSet> = top_datoms
                     .iter()

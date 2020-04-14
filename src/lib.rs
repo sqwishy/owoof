@@ -73,7 +73,7 @@ use std::{
     str::FromStr,
 };
 
-use rusqlite::types::Value as SqlValue;
+// use rusqlite::types::Value as SqlValue;
 
 use anyhow::Context;
 
@@ -90,49 +90,6 @@ pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
 pub(crate) const T_PLAIN: i64 = 0;
 pub(crate) const T_ENTITY: i64 = -1;
 pub(crate) const T_ATTRIBUTE: i64 = -2;
-
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub enum Affinity {
-    Entity,
-    Attribute,
-    Other(u32),
-}
-
-impl Affinity {
-    fn t_and_bind(&self) -> (i64, &'static str) {
-        match self {
-            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
-            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
-            Affinity::Other(t) => (*t as i64, "?"),
-        }
-    }
-}
-
-/// Has an affinity ... TODO rename this
-pub trait Assertable {
-    fn affinity(&self) -> Affinity;
-}
-
-impl Assertable for EntityName {
-    fn affinity(&self) -> Affinity {
-        Affinity::Entity
-    }
-}
-
-impl<'a> Assertable for AttributeName<'a> {
-    fn affinity(&self) -> Affinity {
-        Affinity::Attribute
-    }
-}
-
-impl<'a, I> Assertable for I
-where
-    I: Into<rusqlite::types::Value>,
-{
-    fn affinity(&self) -> Affinity {
-        Affinity::Other(0)
-    }
-}
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -211,28 +168,78 @@ impl<'a> Deref for Attribute<'a> {
     }
 }
 
-// TODO get rid of the T? this is super annoying?
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub enum Affinity {
+    Entity,
+    Attribute,
+    Other(u32),
+}
+
+impl Affinity {
+    fn t_and_bind(&self) -> (i64, &'static str) {
+        match self {
+            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
+            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
+            Affinity::Other(t) => (*t as i64, "?"),
+        }
+    }
+}
+
+/// Has an affinity ... TODO rename this
+pub trait Assertable {
+    fn affinity(&self) -> Affinity;
+}
+
+impl Assertable for EntityName {
+    fn affinity(&self) -> Affinity {
+        Affinity::Entity
+    }
+}
+
+impl<'a> Assertable for AttributeName<'a> {
+    fn affinity(&self) -> Affinity {
+        Affinity::Attribute
+    }
+}
+
+impl<'a, I> Assertable for I
+where
+    I: Into<rusqlite::types::Value>,
+{
+    fn affinity(&self) -> Affinity {
+        Affinity::Other(0)
+    }
+}
+
+pub trait FromAffinityValue {
+    fn from_affinity_value(
+        _: Affinity,
+        _: rusqlite::types::ValueRef,
+    ) -> rusqlite::types::FromSqlResult<Self>
+    where
+        Self: Sized;
+}
+
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum Value<T> {
-    AsIs(T),
+#[serde(untagged)]
+pub enum Value {
     Entity(EntityName),
-    // Attribute(AttributeName),
+    // Attribute(AttributeName), // this is hard because L I F E T I M E
     Null,
     Text(String),
     Blob(Vec<u8>),
     Integer(i64),
     Real(f64),
-    // Uuid(uuid::Uuid),
     // DateTime(chrono::DateTime<chrono::Utc>),
 }
 
-impl<T> From<Entity> for Value<T> {
+impl From<Entity> for Value {
     fn from(e: Entity) -> Self {
         Value::Entity(e.name)
     }
 }
 
-impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
+impl From<rusqlite::types::Value> for Value {
     fn from(v: rusqlite::types::Value) -> Self {
         match v {
             rusqlite::types::Value::Null => Value::Null,
@@ -244,15 +251,24 @@ impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
     }
 }
 
-impl<T> Value<T> {}
+impl FromAffinityValue for Value {
+    fn from_affinity_value(
+        t: Affinity,
+        v: rusqlite::types::ValueRef,
+    ) -> rusqlite::types::FromSqlResult<Self>
+    where
+        Self: Sized,
+    {
+        use rusqlite::types::FromSql;
+        Ok(match t {
+            Affinity::Entity => Value::Entity(EntityName(uuid::Uuid::column_result(v)?)),
+            Affinity::Attribute => todo!("attribute variant in Value enum"),
+            _ => Value::from(rusqlite::types::Value::column_result(v)?),
+        })
+    }
+}
 
-// #[derive(Debug, thiserror::Error)]
-// pub enum ValueError {
-//     #[error("invalid type header sentinel thing")]
-//     InvalidT,
-//     #[error("database type error")]
-//     Sql(#[from] rusqlite::types::FromSqlError),
-// }
+impl Value {}
 
 // pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
 
@@ -265,11 +281,11 @@ impl<T> Value<T> {}
 pub struct Datom<'a, T> {
     pub entity: EntityName,
     pub attribute: AttributeName<'a>, //&'s str,
-    pub value: Value<T>,
+    pub value: T,
 }
 
 impl<'a, T> Datom<'a, T> {
-    pub fn from_eav<S>(entity: EntityName, attribute: AttributeName<'a>, value: Value<T>) -> Self {
+    pub fn from_eav<S>(entity: EntityName, attribute: AttributeName<'a>, value: T) -> Self {
         Self {
             entity,
             attribute,
@@ -277,7 +293,7 @@ impl<'a, T> Datom<'a, T> {
         }
     }
 
-    pub fn eav(self) -> (EntityName, AttributeName<'a>, Value<T>) {
+    pub fn eav(self) -> (EntityName, AttributeName<'a>, T) {
         (self.entity, self.attribute, self.value)
     }
 
@@ -393,10 +409,7 @@ impl<'tx> Session<'tx> {
         rows.collect::<_>()
     }
 
-    fn select(
-        &self,
-        s: &Selection<rusqlite::types::Value>,
-    ) -> rusqlite::Result<Vec<Vec<Value<rusqlite::types::Value>>>> {
+    fn select(&self, s: &Selection<rusqlite::types::Value>) -> rusqlite::Result<Vec<Vec<Value>>> {
         let mut q = sql::Query::default();
         let _ = sql::selection_sql(&s, &mut q);
 
@@ -406,143 +419,18 @@ impl<'tx> Session<'tx> {
             let mut c = sql::RowCursor::from(row);
             s.columns()
                 .iter()
-                .map(|loc| -> rusqlite::Result<Value<_>> {
+                .map(|loc| -> rusqlite::Result<Value> {
                     Ok(match loc.field {
                         matter::Field::Entity => Value::Entity(EntityName(c.get()?)),
                         matter::Field::Attribute => todo!(), // Value::Attribute(AttributeName(c.get()?)),
                         matter::Field::Value => Value::from(c.get::<rusqlite::types::Value>()?),
                     })
                 })
-                .collect::<rusqlite::Result<Vec<Value<rusqlite::types::Value>>>>()
+                .collect::<rusqlite::Result<Vec<Value>>>()
         })?;
 
         rows.collect()
     }
-
-    fn find<T>(
-        &self,
-        top: &str,
-        terms: Vec<Pattern<'_, T>>,
-    ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
-    where
-        // T: Valuable + fmt::Debug,
-        T: rusqlite::types::FromSql + rusqlite::types::ToSql + std::fmt::Debug,
-    {
-        let p = Projection::from_patterns(&terms);
-        let top = p.variables().get(top).expect("undefined variable?");
-
-        let mut query = sql::Query::default();
-
-        // This is mostly dead code, but it sort of fetched all the datoms in all the datomsets
-        // that were involved in the projection and selected them. But maybe this should use a
-        // Selection object instead? Or maybe we don't support this at all?
-
-        let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
-        for n in 0..p.datomsets() {
-            use std::fmt::Write;
-            // I think if we use writeln! we insert carriage returns on windoge. I don't know
-            // if that will fuck up the query but lets just not do that at all ever anyway.
-            write!(
-                query,
-                "{pre}{read_ent} -- {comment}\n",
-                pre = pre.next().unwrap(),
-                read_ent = sql::read_entity(&format!("_dtm{}.e", n)),
-                comment = n,
-            )?;
-            write!(
-                query,
-                "{pre}{read_atr}\n",
-                pre = pre.next().unwrap(),
-                read_atr = sql::read_attribute(&format!("_dtm{}.a", n)),
-            )?;
-            write!(query, "{}_dtm{}.t\n", pre.next().unwrap(), n)?;
-            // TODO this is horribly wrong
-            write!(
-                query,
-                "{}{}\n",
-                pre.next().unwrap(),
-                sql::read_value(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n)),
-            )?;
-        }
-
-        // add FROM and WHERE clause to query
-        sql::projection_sql(&p, &mut query).unwrap();
-
-        // TODO
-        query.push_str(" LIMIT 10");
-
-        eprintln!("{}", query);
-        eprintln!(">>> {:?}", query.params());
-
-        let mut stmt = self.tx.prepare(query.as_str())?;
-
-        let rows = stmt.query_map(query.params(), |row| {
-            let mut c = sql::RowCursor::from(row);
-            (0..p.datomsets())
-                .map(|_| Datom::from_columns(&mut c))
-                .collect::<rusqlite::Result<Vec<Datom<'_, _>>>>()
-        })?;
-
-        weird_grouping(top, rows)
-    }
-}
-
-fn weird_grouping<'a, T, I>(
-    top: &matter::Location,
-    rows: I,
-) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
-where
-    T: fmt::Debug,
-    I: Iterator<Item = rusqlite::Result<Vec<Datom<'a, T>>>>,
-{
-    rows.map(|datoms| {
-        let datoms: Vec<Datom<'_, T>> = datoms?;
-        // group datoms from each row by entity
-        let mut by_ent: HashMap<EntityName, HashMap<String, Value<T>>> = HashMap::new();
-        // later return the entity for the `top` variable
-        let mut top_ent = Option::<EntityName>::None;
-
-        for (n, datom) in datoms.into_iter().enumerate() {
-            let (entity, attribute, value) = datom.eav();
-
-            if n == top.datomset.0 {
-                let e = match top.field {
-                    matter::Field::Entity => entity,
-                    matter::Field::Value => match value {
-                        Value::Entity(e) => e,
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
-                top_ent.replace(e);
-            }
-
-            match by_ent.get_mut(&entity) {
-                Some(map) => {
-                    map.insert(attribute.to_string(), value);
-                }
-                None => {
-                    // map.insert("entity/uuid".to_owned(), Value::Entity(entity));
-                    let mut map: HashMap<String, Value<T>> = HashMap::new();
-                    map.insert(attribute.to_string(), value);
-                    by_ent.insert(entity, map);
-                }
-            }
-        }
-
-        let top_ent = top_ent.expect("variable did not match an entity");
-        let top_map = by_ent
-            .remove(&top_ent)
-            .expect("this is an actual panic; todo explain why");
-
-        // for attr, val top_map.iter_mut()
-
-        return Ok(top_map);
-
-        // TODO this can't work because Value can't contain more hashmaps ...
-        // fn reassemble<K, V>(to: &mut HashMap, from: &mut HashMap
-    })
-    .collect()
 }
 
 #[cfg(test)]
@@ -728,7 +616,7 @@ mod tests {
             "book/avg-rating".into(),
         ];
         let mut attrs_map = p.attribute_map("b", &attrs);
-        attrs_map.limit = 4;
+        attrs_map.limit = 6;
 
         // eprintln!("{:#?}", attrs_map);
         let mut q = sql::Query::default();
@@ -754,14 +642,10 @@ mod tests {
                 .collect::<rusqlite::Result<HashMap<_, _>>>()
         })?;
 
-        let wow =
-            rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, Value<rusqlite::types::Value>>>>>()?;
+        let wow = rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, Value>>>>()?;
 
-        // let wow = sess.select(&s);
-        eprintln!("{:#?}", wow);
-
-        let wow = serde_json::to_string(&wow);
-        eprintln!("{:#?}", wow);
+        let jaysons = serde_json::to_string_pretty(&wow)?;
+        eprintln!("{}", jaysons);
 
         Ok(())
     }

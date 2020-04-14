@@ -87,8 +87,8 @@ pub(crate) const ENTITY_UUID_ROWID: i64 = -1;
 /// This is referenced _literally_ in the "attributes" database view.
 pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
 
-pub(crate) const T_PLAIN: i64 = 0;
 pub(crate) const T_ENTITY: i64 = -1;
+/// This is referenced _literally_ in the "attributes" database view.
 pub(crate) const T_ATTRIBUTE: i64 = -2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
@@ -364,13 +364,28 @@ impl<'a, T> Datom<'a, T> {
 }
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
-pub struct Session<'tx> {
-    tx: &'tx rusqlite::Transaction<'tx>,
+pub struct Session<'db> {
+    tx: rusqlite::Transaction<'db>,
 }
 
-impl<'tx> Session<'tx> {
-    pub fn new(tx: &'tx rusqlite::Transaction) -> Self {
-        Session { tx }
+impl<'db> Session<'db> {
+    pub fn new(db: &'db mut rusqlite::Connection) -> rusqlite::Result<Self> {
+        let tx = db.transaction()?;
+        // This view will exist on the connection, so guard with IF NOT EXISTS.
+        tx.execute(
+            &format!(
+                "CREATE TEMPORARY VIEW IF NOT EXISTS
+                    attributes (rowid, ident)
+                 AS select e, v FROM datoms WHERE a = {} AND t = {}",
+                ATTR_IDENT_ROWID, T_ATTRIBUTE,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+        Ok(Session { tx })
+    }
+
+    pub fn commit(self) -> rusqlite::Result<()> {
+        self.tx.commit()
     }
 
     pub fn new_entity(&self) -> rusqlite::Result<Entity> {
@@ -528,17 +543,6 @@ mod tests {
         )
         .map(|n| assert_eq!(n, 2))?;
 
-        tx.execute(
-            // TODO filter on T_ATTRIBUTE or return t column
-            // TODO make a temporary view in the session?
-            &format!(
-                "CREATE VIEW attributes (rowid, ident)
-                          AS select e, v FROM datoms WHERE a = {}",
-                ATTR_IDENT_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
         tx.commit()?;
 
         Ok(conn)
@@ -546,8 +550,7 @@ mod tests {
 
     pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
         let mut db = test_conn()?;
-        let tx = db.transaction()?;
-        let s = Session::new(&tx);
+        let s = Session::new(&mut db)?;
 
         let mut books = HashMap::<i64, EntityName>::new();
 
@@ -572,7 +575,7 @@ mod tests {
         }
 
         {
-            let rank = s.new_attribute("rating/rank")?; // aka one-to-five
+            let score = s.new_attribute("rating/score")?; // aka one-to-five
             let book = s.new_attribute("rating/book")?;
             let user = s.new_attribute("rating/user")?;
 
@@ -589,11 +592,11 @@ mod tests {
                 let e = s.new_entity()?;
                 s.assert(&e, &book, book_ref)?;
                 s.assert(&e, &user, &rating.user_id)?;
-                s.assert(&e, &rank, &rating.rating)?;
+                s.assert(&e, &score, &rating.rating)?;
             }
         }
 
-        tx.commit()?;
+        s.commit()?;
         return Ok(db);
 
         #[derive(Debug, serde::Deserialize)]
@@ -623,8 +626,7 @@ mod tests {
             })?;
         eprintln!("there are {} datoms ... wow", n_datoms);
 
-        let tx = db.transaction()?;
-        let sess = Session::new(&tx);
+        let sess = Session::new(&mut db)?;
 
         // eprintln!("all datoms: {:#?}", sess.all_datoms::<Value>());
 

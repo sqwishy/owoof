@@ -530,7 +530,7 @@ impl<'tx> Session<'tx> {
                 query,
                 "{}{}\n",
                 pre.next().unwrap(),
-                sql::read_v(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n)),
+                sql::read_value(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n)),
             )?;
         }
 
@@ -695,7 +695,7 @@ mod tests {
             let authors = s.new_attribute("book/authors")?;
 
             let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
-            for result in r.deserialize().take(500) {
+            for result in r.deserialize().take(1000) {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
@@ -714,7 +714,7 @@ mod tests {
             let user = s.new_attribute("rating/user")?;
 
             let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(1500) {
+            for result in r.deserialize().take(2500) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -796,25 +796,41 @@ mod tests {
         );
 
         // let book = p.variable("b").cloned().unwrap();
-        let attrs = vec!["book/title".into(), "book/isbn".into()];
-        let mut s = p.select_map("b", &attrs);
-
-        // let mut s = Selection::new(&p);
-        // s.columns.push(p.variable("b").cloned().unwrap());
-        // s.columns.push(p.variable("t").cloned().unwrap());
-        // s.columns.push(p.variable("v").cloned().unwrap());
-        // s.limit = 8;
+        let attrs = vec![
+            "book/title".into(),
+            "book/isbn".into(),
+            "book/avg-rating".into(),
+        ];
+        let s = p.attribute_map("b", &attrs);
 
         eprintln!("{:#?}", s);
+        let mut q = sql::Query::default();
+        sql::attribute_map_sql(&s, &mut q).unwrap();
+        eprintln!("{}", q);
+        eprintln!("{:?}", q.params());
 
-        // let mut q = sql::Query::default();
-        // sql::selection_sql(&s, &mut q).unwrap();
-        // eprintln!("{}", q);
-        // eprintln!("{:?}", q.params());
+        let mut stmt = sess.tx.prepare(q.as_str())?;
+
+        let rows = stmt.query_map(q.params(), |row| {
+            let mut c = sql::RowCursor::from(row);
+            s.map
+                .iter()
+                .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
+                    let value = match c.get()? {
+                        T_ENTITY => Value::Entity(EntityName(c.get()?)),
+                        T_ATTRIBUTE => todo!("attribute variant in Value enum"),
+                        _ => Value::from(c.get::<rusqlite::types::Value>()?),
+                    };
+                    Ok((*attr, value))
+                })
+                .collect::<rusqlite::Result<HashMap<_, _>>>()
+        })?;
+
+        let wow =
+            rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, Value<rusqlite::types::Value>>>>>()?;
 
         // let wow = sess.select(&s);
-        // eprintln!("{:#?}", wow);
-
+        eprintln!("{:#?}", wow);
         Ok(())
     }
 }

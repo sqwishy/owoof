@@ -8,6 +8,27 @@ use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Pr
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
 
+// pub trait SqlQueryable {
+//     fn append_query<'s>(&'s self, _: &'s mut Query);
+// }
+//
+// pub trait SqlStringable {
+//     fn append_sql<W: Write>(&self, _: W) -> fmt::Result;
+// }
+//
+// impl<T: SqlStringable> SqlQueryable for T {
+//     fn append_query<'s>(&'s self, query: &'s mut Query) {
+//         let _ = SqlStringable::append_sql(self, &mut query);
+//     }
+// }
+
+// /// Gives us ToString for free ...
+// impl<T: SqlStringable> fmt::Display for T {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         self.append_sql(f)
+//     }
+// }
+
 #[derive(Debug)]
 pub struct GenericQuery<T> {
     string: String,
@@ -112,7 +133,7 @@ where
             query.push_str("     , datoms ")
         }
         // write the alias
-        write!(query, "_dtm{}\n", n).unwrap();
+        write!(query, "_dtm{}\n", n)?;
     }
 
     for (n, constraint) in projection.constraints().iter().enumerate() {
@@ -160,20 +181,43 @@ where
     Ok(())
 }
 
-/// Write the sql result column expression for the given Location
-pub fn location_sql<W: Write>(l: &matter::Location, query: &mut W) -> fmt::Result {
-    let column = match l.field {
-        Field::Entity => "e",
-        Field::Attribute => "a",
-        Field::Value => "v",
-    };
-    write!(query, "_dtm{}.{}", l.datomset.0, column)
+// impl SqlStringable for matter::Location {
+//     fn append_sql<W: Write>(&self, w: W) -> fmt::Result {
+//         let column = match self.field {
+//             Field::Entity => "e",
+//             Field::Attribute => "a",
+//             Field::Value => "v",
+//         };
+//         write!(w, "_dtm{}.{}", self.datomset.0, column)
+//     }
+// }
+
+pub fn location_sql<W: Write>(l: &matter::Location, w: &mut W) -> fmt::Result {
+    write!(w, "{}", location(l))
 }
 
 pub fn location(l: &matter::Location) -> String {
-    let mut s = String::new();
-    let _ = location_sql(l, &mut s);
-    s
+    match l.field {
+        Field::Entity => datomset_e(l.datomset),
+        Field::Attribute => datomset_a(l.datomset),
+        Field::Value => datomset_v(l.datomset),
+    }
+}
+
+pub fn datomset_e(datomset: DatomSet) -> String {
+    format!("_dtm{}.e", datomset.0)
+}
+
+pub fn datomset_a(datomset: DatomSet) -> String {
+    format!("_dtm{}.a", datomset.0)
+}
+
+pub fn datomset_t(datomset: DatomSet) -> String {
+    format!("_dtm{}.t", datomset.0)
+}
+
+pub fn datomset_v(datomset: DatomSet) -> String {
+    format!("_dtm{}.v", datomset.0)
 }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
@@ -190,11 +234,7 @@ where
             Field::Entity => read_entity(&location(l)),
             Field::Attribute => read_attribute(&location(l)),
             // TODO read the T/affinity field also?
-            Field::Value => read_v(
-                // TODO is this cheating?
-                &format!("_dtm{}.t", l.datomset.0),
-                &location(l),
-            ),
+            Field::Value => read_value(&datomset_t(l.datomset), &datomset_v(l.datomset)),
         };
         query.push_str(&col_str);
         query.push_str("\n");
@@ -210,7 +250,31 @@ where
     Ok(())
 }
 
-pub(crate) fn read_v(t_col: &str, v_col: &str) -> String {
+pub fn attribute_map_sql<'q, 'a: 'q, V>(
+    attrs: &'a matter::AttributeMap<'a, V>,
+    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
+) -> fmt::Result
+where
+    V: Debug + ToSql,
+{
+    let pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
+
+    for (pre, (_, datomset)) in pre.zip(attrs.map.iter().cloned()) {
+        write!(
+            query,
+            "{pre}{t}, {v}\n",
+            pre = pre,
+            t = &datomset_t(datomset),
+            v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
+        )?
+    }
+
+    projection_sql(attrs.projection, query)?;
+
+    Ok(())
+}
+
+pub(crate) fn read_value(t_col: &str, v_col: &str) -> String {
     format!(
         "CASE {t}
          WHEN {t_ent} THEN {rd_ent}

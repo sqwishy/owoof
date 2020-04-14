@@ -317,16 +317,12 @@ where
         self.constraints.push(c);
     }
 
-    pub fn select_map<I>(
-        &mut self,
-        top: &'a str,
-        attrs: I,
-    ) -> HashMap<&'a AttributeName<'a>, DatomSet>
+    pub fn attribute_map<I>(&'a mut self, top: &'a str, attrs: I) -> AttributeMap<'a, V>
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
         use dialogue::{Pattern, VariableOr};
-        attrs
+        let map = attrs
             .into_iter()
             .map(|attr| {
                 // Create a new datomset that fetches this attribute value
@@ -336,8 +332,19 @@ where
                 self.constrain(datomset.attribute_field().constrained_to(attr));
                 (attr, datomset)
             })
-            .collect()
+            .collect();
+        AttributeMap {
+            map,
+            projection: self,
+        }
     }
+}
+
+#[derive(Debug)]
+pub struct AttributeMap<'a, V> {
+    pub projection: &'a Projection<'a, V>,
+    pub map: Vec<(&'a AttributeName<'a>, DatomSet)>,
+    // pub limit: i64,
 }
 
 #[derive(Debug)]

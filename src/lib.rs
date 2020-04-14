@@ -134,7 +134,9 @@ where
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
 pub struct EntityName(uuid::Uuid);
 
 impl Deref for EntityName {
@@ -151,7 +153,9 @@ impl rusqlite::ToSql for EntityName {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
 pub struct AttributeName<'a>(Cow<'a, str>);
 
 impl<'a> Deref for AttributeName<'a> {
@@ -208,7 +212,7 @@ impl<'a> Deref for Attribute<'a> {
 }
 
 // TODO get rid of the T? this is super annoying?
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Value<T> {
     AsIs(T),
     Entity(EntityName),
@@ -755,6 +759,10 @@ mod tests {
 
         // let wow = sess.select(&s);
         eprintln!("{:#?}", wow);
+
+        let wow = serde_json::to_string(&wow);
+        eprintln!("{:#?}", wow);
+
         Ok(())
     }
 }

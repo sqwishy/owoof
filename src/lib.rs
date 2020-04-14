@@ -82,10 +82,10 @@ pub use matter::{Pattern, Projection, Selection};
 pub(crate) const SCHEMA: &'static str = include_str!("../schema.sql");
 
 /// Hard coded entity row ID for attribute of the identifier "entity/uuid" ...
-pub(crate) const ENTITY_UUID: i64 = -1;
+pub(crate) const ENTITY_UUID_ROWID: i64 = -1;
 /// Hard coded entity row ID for attribute of the identifier "attr/ident" ...
 /// This is referenced _literally_ in the "attributes" database view.
-pub(crate) const ATTR_IDENT: i64 = -2;
+pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
 
 pub(crate) const T_PLAIN: i64 = 0;
 pub(crate) const T_ENTITY: i64 = -1;
@@ -335,7 +335,7 @@ impl<'tx> Session<'tx> {
 
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![rowid, ATTR_IDENT, T_ATTRIBUTE, &*ident],
+            rusqlite::params![rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &*ident],
         )?;
         assert_eq!(n, 1);
 
@@ -562,9 +562,9 @@ mod tests {
         tx.execute(
             "INSERT INTO entities (rowid, uuid) VALUES (?, ?), (?, ?)",
             rusqlite::params![
-                ENTITY_UUID,
+                ENTITY_UUID_ROWID,
                 uuid::Uuid::new_v4(),
-                ATTR_IDENT,
+                ATTR_IDENT_ROWID,
                 uuid::Uuid::new_v4(),
             ],
         )
@@ -575,12 +575,12 @@ mod tests {
                   VALUES (?, ?, ?, ?)
                        , (?, ?, ?, ?)",
             rusqlite::params![
-                ENTITY_UUID, // the entity/uuid attribute's rowid
-                ATTR_IDENT,  // has a attr/ident attribue
-                T_ATTRIBUTE,
-                "entity/uuid", // of this string
-                ATTR_IDENT,
-                ATTR_IDENT,
+                ENTITY_UUID_ROWID, // the entity/uuid attribute's rowid
+                ATTR_IDENT_ROWID,  // has a attr/ident attribue
+                T_ATTRIBUTE,       //
+                "entity/uuid",     // of this string
+                ATTR_IDENT_ROWID,
+                ATTR_IDENT_ROWID,
                 T_ATTRIBUTE,
                 "attr/ident",
             ],
@@ -588,10 +588,12 @@ mod tests {
         .map(|n| assert_eq!(n, 2))?;
 
         tx.execute(
+            // TODO filter on T_ATTRIBUTE or return t column
+            // TODO make a temporary view in the session?
             &format!(
                 "CREATE VIEW attributes (rowid, ident)
                           AS select e, v FROM datoms WHERE a = {}",
-                ATTR_IDENT,
+                ATTR_IDENT_ROWID,
             ),
             rusqlite::NO_PARAMS,
         )?;
@@ -700,9 +702,9 @@ mod tests {
         // eprintln!("{:#?}", q);
 
         let patterns = vec![
+            // pat!(?r "rating/book" ?b),
             pat!(?b "book/avg-rating" ?v),
             pat!(?b "book/title" ?t),
-            // pat!(?r "rating/book" ?b),
         ];
         let max_rating = 4.0.into();
 
@@ -724,7 +726,7 @@ mod tests {
         let mut attrs_map = p.attribute_map("b", &attrs);
         attrs_map.limit = 4;
 
-        eprintln!("{:#?}", attrs_map);
+        // eprintln!("{:#?}", attrs_map);
         let mut q = sql::Query::default();
         sql::attribute_map_sql(&attrs_map, &mut q).unwrap();
         eprintln!("{}", q);

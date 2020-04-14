@@ -261,8 +261,40 @@ where
         &self.constraints
     }
 
+    /// Return the first location (if any) where this variable was used.
     pub fn variable(&self, n: &str) -> Option<&Location> {
         self.variables.get(n)
+    }
+
+    /// Find all locations constrained to this variable.
+    ///
+    /// As an implementation detail, this doesn't search recursively.
+    ///
+    /// If we say that x is at 0.v, we include search constraints that equal 0.v, but we don't
+    /// recurse and search for things equal to those. That _should_ be fine based on the way that
+    /// [constrain_variable()] works?
+    pub fn variable_locations(&self, n: &str) -> impl Iterator<Item = &Location> {
+        self.variables
+            .get(n)
+            .into_iter()
+            .map(move |first| {
+                Some(first)
+                    .into_iter()
+                    .chain(self.constraints().iter().filter_map(move |c| match c {
+                        Constraint {
+                            lh,
+                            op: ConstraintOp::Eq,
+                            rh: Concept::Location(rh),
+                        } if lh == first => Some(rh),
+                        Constraint {
+                            lh,
+                            op: ConstraintOp::Eq,
+                            rh: Concept::Location(rh),
+                        } if rh == first => Some(lh),
+                        _ => None,
+                    }))
+            })
+            .flatten()
     }
 
     fn add_datomset(&mut self) -> DatomSet {
@@ -361,17 +393,45 @@ where
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
+        // Attempt to reuse datomsets where the `top` is constrained to the datomset entity
+        let top_datoms = self
+            .variable_locations(top)
+            .filter(|l| l.field == Field::Entity)
+            .map(|l| l.datomset)
+            .collect::<Vec<_>>();
+
         let map = attrs
             .into_iter()
             .map(|attr| {
+                eprintln!("wow {:?}", attr);
+
+                // Search the datomsets for top for one that is constrained to the attribute...
+                let exists: Option<DatomSet> = top_datoms
+                    .iter()
+                    .find(|datomset| {
+                        let datomset_attr = datomset.attribute_field();
+                        self.constraints().iter().any(move |c| match c {
+                            Constraint {
+                                lh,
+                                op: ConstraintOp::Eq,
+                                rh: Concept::Attribute(rh),
+                            } => *lh == datomset_attr && *rh == attr,
+                            _ => false,
+                        })
+                    })
+                    .cloned();
+                if let Some(datomset) = exists {
+                    return (attr, datomset);
+                }
+
                 // Create a new datomset that fetches this attribute value
-                // TODO reuse existing constraints?
                 let datomset = self.add_datomset();
                 self.constrain_variable(top, datomset.entity_field());
                 self.constrain(datomset.attribute_field().constrained_to(attr));
                 (attr, datomset)
             })
             .collect();
+
         AttributeMap {
             map,
             projection: self,
@@ -383,6 +443,7 @@ where
 #[derive(Debug)]
 pub struct AttributeMap<'a, V> {
     pub projection: &'a Projection<'a, V>,
+    /// This is ordered, corresponding to query row column order
     pub map: Vec<(&'a AttributeName<'a>, DatomSet)>,
     pub limit: i64,
 }

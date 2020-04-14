@@ -2,6 +2,8 @@ use std::{collections::HashMap, fmt::Debug, iter};
 
 use crate::{dialogue, AttributeName, EntityName};
 
+const ANONYMOUS: &'static str = "";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DatomSet(pub usize);
 
@@ -202,19 +204,6 @@ where
         p
     }
 
-    // pub fn select<'v, I: Iterator<Item = &'v str>>(
-    //     self,
-    //     i: I,
-    // ) -> Result<Selection<'a, V>, &'v str> {
-    //     let columns = i
-    //         .map(|var| self.variables.get(var).cloned().ok_or(var))
-    //         .collect::<Result<Vec<_>, &str>>()?;
-    //     Ok(Selection {
-    //         projection: self,
-    //         columns,
-    //     })
-    // }
-
     // pub fn datomsets(&self) -> impl Iterator<Item = DatomSet> {
     //     (0..self.sets).map(DatomSet)
     // }
@@ -241,10 +230,18 @@ where
         datomset
     }
 
+    fn constrain(&mut self, c: Constraint<'a, V>) {
+        self.constraints.push(c)
+    }
+
     /// Register a variable at some location.
     /// If it was registered before, constraint the existing variable to the given location.
+    ///
+    /// The anonymous variable (the empty string) is
     fn constrain_variable(&mut self, variable: &'a str, location: Location) {
-        if let Some(prior) = self.variables.get(variable) {
+        if variable == ANONYMOUS {
+            return;
+        } else if let Some(prior) = self.variable(variable) {
             let equal_to_prior = location.constrained_to(prior.clone());
             self.constraints.push(equal_to_prior);
         } else {
@@ -258,7 +255,8 @@ where
         }
     }
 
-    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<V>) {
+    // TODO, does this actually have to borrow pattern like this or just Pattern<'p, ..>?
+    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<V>) -> DatomSet {
         use dialogue::{Pattern, VariableOr};
         match pattern {
             // a :person/name "Spongebob"
@@ -273,12 +271,12 @@ where
                 self.constrain_variable(e, datomset.entity_field());
 
                 // constrain the attribute ...
-                self.constraints
-                    .push(datomset.attribute_field().constrained_to(a));
+                self.constrain(datomset.attribute_field().constrained_to(a));
 
                 // ... and value
-                self.constraints
-                    .push(datomset.value_field().constrained_to(Concept::Value(v)));
+                self.constrain(datomset.value_field().constrained_to(Concept::Value(v)));
+
+                datomset
             }
 
             // a :person/name b
@@ -293,11 +291,12 @@ where
                 self.constrain_variable(e, datomset.entity_field());
 
                 // constrain the attribute ...
-                self.constraints
-                    .push(datomset.attribute_field().constrained_to(a));
+                self.constrain(datomset.attribute_field().constrained_to(a));
 
                 // ... and the value
-                self.constrain_variable(v, datomset.value_field())
+                self.constrain_variable(v, datomset.value_field());
+
+                datomset
             }
 
             // // a b c
@@ -316,6 +315,28 @@ where
 
     pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, V>) {
         self.constraints.push(c);
+    }
+
+    pub fn select_map<I>(
+        &mut self,
+        top: &'a str,
+        attrs: I,
+    ) -> HashMap<&'a AttributeName<'a>, DatomSet>
+    where
+        I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
+    {
+        use dialogue::{Pattern, VariableOr};
+        attrs
+            .into_iter()
+            .map(|attr| {
+                // Create a new datomset that fetches this attribute value
+                // TODO reuse existing constraints?
+                let datomset = self.add_datomset();
+                self.constrain_variable(top, datomset.entity_field());
+                self.constrain(datomset.attribute_field().constrained_to(attr));
+                (attr, datomset)
+            })
+            .collect()
     }
 }
 

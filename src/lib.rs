@@ -318,29 +318,7 @@ impl From<rusqlite::types::Value> for Value<rusqlite::types::Value> {
     }
 }
 
-impl<T> Value<T> {
-    // fn t(&self) -> i64 {
-    //     match self {
-    //         Value::AsIs(i) => todo!(),
-    //         Value::Entity(i) => i.t(),
-    //         Value::DateTime(i) => i.t(),
-    //         Value::Uuid(_)
-    //         | Value::Null
-    //         | Value::Text(_)
-    //         | Value::Blob(_)
-    //         | Value::Integer(_)
-    //         | Value::Real(_) => T_PLAIN,
-    //     }
-    // }
-
-    fn read_t_v_sql<'s>(t_col: &'s str, v_col: &'s str) -> Cow<'s, str> {
-        sql::read_v(t_col, v_col).into()
-    }
-
-    // fn bind_str(&self) -> &'static str {
-    //     "?"
-    // }
-}
+impl<T> Value<T> {}
 
 // #[derive(Debug, thiserror::Error)]
 // pub enum ValueError {
@@ -552,7 +530,7 @@ impl<'tx> Session<'tx> {
                 query,
                 "{}{}\n",
                 pre.next().unwrap(),
-                Value::<T>::read_t_v_sql(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n),),
+                sql::read_v(&format!("_dtm{}.t", n), &format!("_dtm{}.v", n)),
             )?;
         }
 
@@ -801,16 +779,15 @@ mod tests {
 
         // eprintln!("{:#?}", q);
 
-        let mut p = Projection::<rusqlite::types::Value>::default();
-
-        let pats = vec![
-            pat!(?b "book/title" ?t),
+        let patterns = vec![
             pat!(?b "book/avg-rating" ?v),
+            pat!(?b "book/title" ?t),
             // pat!(?r "rating/book" ?b),
         ];
-        p.add_patterns(&pats);
-
         let max_rating = 4.0.into();
+
+        let mut p = Projection::<rusqlite::types::Value>::default();
+        p.add_patterns(&patterns);
         p.add_constraint(
             p.variable("v")
                 .cloned()
@@ -818,21 +795,25 @@ mod tests {
                 .le(matter::Concept::Value(&max_rating)),
         );
 
-        let mut s = Selection::new(&p);
-        s.columns.push(p.variable("b").cloned().unwrap());
-        s.columns.push(p.variable("t").cloned().unwrap());
-        s.columns.push(p.variable("v").cloned().unwrap());
-        s.limit = 8;
+        // let book = p.variable("b").cloned().unwrap();
+        let attrs = vec!["book/title".into(), "book/isbn".into()];
+        let mut s = p.select_map("b", &attrs);
+
+        // let mut s = Selection::new(&p);
+        // s.columns.push(p.variable("b").cloned().unwrap());
+        // s.columns.push(p.variable("t").cloned().unwrap());
+        // s.columns.push(p.variable("v").cloned().unwrap());
+        // s.limit = 8;
 
         eprintln!("{:#?}", s);
 
-        let mut q = sql::Query::default();
-        sql::selection_sql(&s, &mut q).unwrap();
-        eprintln!("{}", q);
-        eprintln!("{:?}", q.params());
+        // let mut q = sql::Query::default();
+        // sql::selection_sql(&s, &mut q).unwrap();
+        // eprintln!("{}", q);
+        // eprintln!("{:?}", q.params());
 
-        let wow = sess.select(&s);
-        eprintln!("{:#?}", wow);
+        // let wow = sess.select(&s);
+        // eprintln!("{:#?}", wow);
 
         Ok(())
     }

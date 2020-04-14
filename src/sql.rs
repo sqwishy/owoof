@@ -161,9 +161,8 @@ where
                 location_sql(l, &mut query)?;
             }
             Concept::Entity(ent) => {
-                use crate::Valuable;
                 query.push_str(bind_entity());
-                query.add_param(ent.to_sql_dbg() as &dyn ToSqlDebug);
+                query.add_param(ent as &dyn ToSqlDebug);
             }
             Concept::Attribute(handle) => {
                 query.push_str(bind_attribute());

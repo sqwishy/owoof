@@ -122,7 +122,7 @@ impl Assertable for EntityName {
 
 impl<'a> Assertable for AttributeName<'a> {
     fn affinity(&self) -> Affinity {
-        Affinity::Entity
+        Affinity::Attribute
     }
 }
 
@@ -212,78 +212,6 @@ impl<'a> Deref for Attribute<'a> {
         &self.ident
     }
 }
-
-pub trait Valuable {
-    fn t(&self) -> i64;
-    fn to_sql(&self) -> &dyn rusqlite::types::ToSql;
-    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug;
-    // fn from_sql(t: i64, v: rusqlite::types::ValueRef) -> Result<Self, ValueError>
-    // where
-    //     Self: rusqlite::types::FromSql + Sized,
-    // {
-    //     Ok(rusqlite::types::FromSql::column_result(v)?)
-    // }
-}
-
-impl Valuable for EntityName {
-    fn t(&self) -> i64 {
-        T_ENTITY
-    }
-
-    fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
-        &self.0
-    }
-
-    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
-        &self.0
-    }
-}
-
-// impl<T: rusqlite::types::ToSql + fmt::Debug> Valuable for T {
-impl Valuable for rusqlite::types::Value {
-    fn t(&self) -> i64 {
-        T_PLAIN
-    }
-
-    fn to_sql(&self) -> &dyn rusqlite::types::ToSql {
-        self
-    }
-
-    fn to_sql_dbg(&self) -> &dyn sql::ToSqlDebug {
-        self
-    }
-}
-
-// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);
-//
-// impl<T> Deref for MemeTime<T> {
-//     type Target = T;
-//
-//     fn deref(&self) -> &Self::Target {
-//         &self.0
-//     }
-// }
-//
-// impl rusqlite::types::ToSql for MemeTime<&chrono::DateTime<chrono::Utc>> {
-//     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-//         Ok(self.timestamp_millis().into())
-//     }
-// }
-//
-// impl rusqlite::types::FromSql for MemeTime<chrono::DateTime<chrono::Utc>> {
-//     fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-//         use chrono::TimeZone;
-//         value.as_i64().and_then(|v| {
-//             chrono::Utc
-//                 .timestamp_millis_opt(v)
-//                 .single()
-//                 .ok_or_else(|| rusqlite::types::FromSqlError::OutOfRange(v))
-//                 .map(chrono::DateTime::<chrono::Utc>::from)
-//                 .map(MemeTime)
-//         })
-//     }
-// }
 
 // TODO get rid of the T? this is super annoying?
 #[derive(Clone, PartialEq, Debug)]

@@ -323,6 +323,12 @@ impl<'a> RowCursor<'a> {
         self.cursor += 1;
         res
     }
+
+    pub fn get_raw(&mut self) -> rusqlite::types::ValueRef {
+        let raw = self.row.get_raw(self.cursor);
+        self.cursor += 1;
+        raw
+    }
 }
 
 impl<'a> From<&'a rusqlite::Row<'a>> for RowCursor<'a> {

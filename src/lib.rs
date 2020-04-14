@@ -59,7 +59,6 @@
 //!
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![allow(unused_variables)]
 // ^^^ todo; get your shit together ^^^
 
 mod matter;
@@ -68,6 +67,7 @@ mod sql;
 use std::collections::HashMap;
 use std::{
     borrow::{Borrow, Cow},
+    convert::TryFrom,
     fmt,
     ops::Deref,
     str::FromStr,
@@ -139,10 +139,33 @@ impl<'a> rusqlite::ToSql for AttributeName<'a> {
     }
 }
 
+pub trait RowIdOr<T> {
+    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s T>;
+}
+
+impl RowIdOr<EntityName> for EntityName {
+    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s EntityName> {
+        either::Right(self)
+    }
+}
+
+impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
+    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s AttributeName<'a>> {
+        either::Right(self)
+    }
+}
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
     pub rowid: i64,
     pub name: EntityName,
+}
+
+/// Not implemented for all T, because Entity and Attribute rowids are not the same!
+impl RowIdOr<EntityName> for Entity {
+    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s EntityName> {
+        either::Left(self.rowid)
+    }
 }
 
 impl Deref for Entity {
@@ -155,9 +178,15 @@ impl Deref for Entity {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Attribute<'a> {
-    pub rowid: i64,
     pub entity: Entity,
     pub ident: AttributeName<'a>,
+}
+
+/// Not implemented for all T, because Entity and Attribute rowids are not the same!
+impl<'a> RowIdOr<AttributeName<'a>> for Attribute<'a> {
+    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s AttributeName<'a>> {
+        either::Left(self.entity.rowid)
+    }
 }
 
 impl<'a> Deref for Attribute<'a> {
@@ -172,7 +201,7 @@ impl<'a> Deref for Attribute<'a> {
 pub enum Affinity {
     Entity,
     Attribute,
-    Other(u32),
+    Other(i64),
 }
 
 impl Affinity {
@@ -180,7 +209,20 @@ impl Affinity {
         match self {
             Affinity::Entity => (T_ENTITY, sql::bind_entity()),
             Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
-            Affinity::Other(t) => (*t as i64, "?"),
+            Affinity::Other(t) => (*t, "?"),
+        }
+    }
+}
+
+impl TryFrom<i64> for Affinity {
+    type Error = i64;
+
+    fn try_from(t: i64) -> Result<Self, Self::Error> {
+        match t {
+            T_ENTITY => Ok(Affinity::Entity),
+            T_ATTRIBUTE => Ok(Affinity::Attribute),
+            _ if t >= 0 => Ok(Affinity::Other(t)),
+            _ => Err(t),
         }
     }
 }
@@ -262,7 +304,8 @@ impl FromAffinityValue for Value {
         use rusqlite::types::FromSql;
         Ok(match t {
             Affinity::Entity => Value::Entity(EntityName(uuid::Uuid::column_result(v)?)),
-            Affinity::Attribute => todo!("attribute variant in Value enum"),
+            // Affinity::Attribute => todo!("attribute variant in Value enum"),
+            Affinity::Attribute => Value::Text(String::column_result(v)?),
             _ => Value::from(rusqlite::types::Value::column_result(v)?),
         })
     }
@@ -285,7 +328,7 @@ pub struct Datom<'a, T> {
 }
 
 impl<'a, T> Datom<'a, T> {
-    pub fn from_eav<S>(entity: EntityName, attribute: AttributeName<'a>, value: T) -> Self {
+    pub fn from_eav(entity: EntityName, attribute: AttributeName<'a>, value: T) -> Self {
         Self {
             entity,
             attribute,
@@ -298,28 +341,25 @@ impl<'a, T> Datom<'a, T> {
     }
 
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
-where
-        // S: rusqlite::types::FromSql,
-        // T: rusqlite::types::FromSql,
+    where
+        T: FromAffinityValue,
     {
         Self::from_columns(&mut sql::RowCursor::from(row))
     }
 
     /// Expects a columns in the form of `e a is_ref v`
     pub fn from_columns<'c>(c: &mut sql::RowCursor<'c>) -> rusqlite::Result<Self>
-where
-        // S: rusqlite::types::FromSql,
-        // T: rusqlite::types::FromSql,
+    where
+        T: FromAffinityValue,
     {
         let e = EntityName(c.get()?);
         let a = AttributeName(c.get::<String>()?.into());
-        let v = match c.get()? {
-            T_ENTITY => Value::Entity(EntityName(c.get()?)),
-            // T_DATETIME => Value::DateTime(c.get()?),
-            _ => Value::from(c.get::<rusqlite::types::Value>()?),
-        };
-        todo!()
-        // Ok(Datom::from_eav(e, a, v))
+        let affinity = Affinity::try_from(c.get::<i64>()?)
+            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
+            .map_err(|e| rusqlite::types::FromSqlError::Other(e))?;
+        let v_ref = c.get_raw();
+        let v = T::from_affinity_value(affinity, v_ref)?;
+        Ok(Datom::from_eav(e, a, v))
     }
 }
 
@@ -360,35 +400,41 @@ impl<'tx> Session<'tx> {
         )?;
         assert_eq!(n, 1);
 
-        let rowid = self.tx.last_insert_rowid();
-        Ok(Attribute {
-            rowid,
-            entity,
-            ident,
-        })
+        Ok(Attribute { entity, ident })
     }
 
-    pub fn assert<T>(&self, e: &EntityName, a: &AttributeName<'_>, v: &T) -> rusqlite::Result<()>
+    pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> rusqlite::Result<()>
     where
-        T: Assertable + rusqlite::ToSql,
+        E: RowIdOr<EntityName>,
+        A: RowIdOr<AttributeName<'z>>,
+        T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
-        let (t, bind_str) = v.affinity().t_and_bind();
+        let e_variant = e.row_id_or();
+        let (e, e_bind_str) = match e_variant.as_ref() {
+            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
+            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
+        };
+
+        let a_variant = a.row_id_or();
+        let (a, a_bind_str) = match a_variant.as_ref() {
+            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
+            either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
+        };
+
+        let (t, v_bind_str) = v.affinity().t_and_bind();
 
         let sql = format!(
-            r#"
-    INSERT INTO datoms (e, a, t, v)
-         VALUES ( (SELECT rowid FROM entities   WHERE uuid = ?)
-                , (SELECT rowid FROM attributes WHERE ident = ?)
-                , ?
-                , {} )
-         "#,
-            bind_str,
+            r#"INSERT INTO datoms (e, a, t, v)
+                    VALUES ( {e}, {a}, ?, {v} )"#,
+            e = e_bind_str,
+            a = a_bind_str,
+            v = v_bind_str,
         );
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
-            &e.deref() as &dyn rusqlite::ToSql,
-            &a.deref() as &dyn rusqlite::ToSql,
+            e as &dyn rusqlite::ToSql,
+            a as &dyn rusqlite::ToSql,
             &t as &dyn rusqlite::ToSql,
             v,
         ])?;
@@ -399,7 +445,7 @@ impl<'tx> Session<'tx> {
     /// for debugging ... use with T as rusqlite::types::Value
     fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<T>>>
     where
-        T: rusqlite::types::FromSql,
+        T: FromAffinityValue,
     {
         // TODO this ignores the t value
         let sql = r#"
@@ -570,14 +616,17 @@ mod tests {
     #[test]
     fn wow() -> Result<()> {
         let mut db = goodbooks()?;
-        return Ok(());
+
+        let n_datoms: i64 =
+            db.query_row("SELECT count(*) FROM datoms", rusqlite::NO_PARAMS, |row| {
+                row.get(0)
+            })?;
+        eprintln!("there are {} datoms ... wow", n_datoms);
+
         let tx = db.transaction()?;
         let sess = Session::new(&tx);
 
-        // eprintln!(
-        //     "all datoms: {:#?}",
-        //     s.all_datoms::<rusqlite::types::Value>()
-        // );
+        // eprintln!("all datoms: {:#?}", sess.all_datoms::<Value>());
 
         let patterns = vec![
             // pat!(?r "rating/book" ?b),
@@ -597,13 +646,13 @@ mod tests {
 
         // let book = p.variable("b").cloned().unwrap();
         let attrs = vec![
-            "entity/uuid".into(),
+            // "entity/uuid".into(),
             "book/title".into(),
             "book/isbn".into(),
             "book/avg-rating".into(),
         ];
         let mut attrs_map = p.attribute_map("b", &attrs);
-        attrs_map.limit = 6;
+        attrs_map.limit = 12;
 
         // eprintln!("{:#?}", attrs_map);
         let mut q = sql::Query::default();

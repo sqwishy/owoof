@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt::Debug, iter};
+use std::{borrow::Cow, collections::HashMap, fmt::Debug, iter};
 
-use crate::{dialogue, AttributeName, EntityName};
+use crate::{AttributeName, EntityName};
 
 const ANONYMOUS: &'static str = "";
 
@@ -88,6 +88,47 @@ impl Location {
 //         Variable(l)
 //     }
 // }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum VariableOr<S, T> {
+    Variable(S),
+    Value(T),
+}
+
+/// An entity-attribute-value tuple, with the possibility of variables for each element.
+/// The values for entity and attribute are public handles, a uuid and string
+/// respectively, rather than the private/internal database ids.
+/// (var|entity, var|attribute, var|value)
+#[derive(Debug)]
+pub struct Pattern<'a, V> {
+    pub entity: VariableOr<Cow<'a, str>, EntityName>,
+    pub attribute: VariableOr<Cow<'a, str>, AttributeName<'a>>,
+    pub value: VariableOr<Cow<'a, str>, V>,
+}
+
+#[macro_export]
+macro_rules! pat {
+    (?$e:ident $a:tt ?$v:ident) => {{
+       $crate::matter::Pattern {
+            entity: pat!(:var $e),
+            attribute: pat!(:val $a),
+            value: pat!(:var $v),
+        }
+    }};
+    (?$e:ident $a:tt $v:tt) => {{
+       $crate::matter::Pattern {
+            entity: pat!(:var $e),
+            attribute: pat!(:val $a),
+            value: pat!(:val $v),
+        }
+    }};
+    (:var $v:ident) => {
+        $crate::matter::VariableOr::Variable(stringify!($v).into())
+    };
+    (:val $v:tt) => {
+        $crate::matter::VariableOr::Value($v.into())
+    };
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConstraintOp {
@@ -198,7 +239,7 @@ impl<'a, V> Projection<'a, V>
 where
     V: Debug,
 {
-    pub fn from_patterns(patterns: &'a Vec<dialogue::Pattern<V>>) -> Self {
+    pub fn from_patterns(patterns: &'a Vec<Pattern<V>>) -> Self {
         let mut p = Self::default();
         p.add_patterns(patterns);
         p
@@ -249,15 +290,14 @@ where
         }
     }
 
-    pub fn add_patterns(&mut self, patterns: &'a Vec<dialogue::Pattern<V>>) {
+    pub fn add_patterns(&mut self, patterns: &'a Vec<Pattern<V>>) {
         for pattern in patterns {
             self.add_pattern(pattern);
         }
     }
 
     // TODO, does this actually have to borrow pattern like this or just Pattern<'p, ..>?
-    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p dialogue::Pattern<V>) -> DatomSet {
-        use dialogue::{Pattern, VariableOr};
+    pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p Pattern<V>) -> DatomSet {
         match pattern {
             // a :person/name "Spongebob"
             Pattern {
@@ -321,7 +361,6 @@ where
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
-        use dialogue::{Pattern, VariableOr};
         let map = attrs
             .into_iter()
             .map(|attr| {
@@ -336,6 +375,7 @@ where
         AttributeMap {
             map,
             projection: self,
+            limit: 0,
         }
     }
 }
@@ -344,7 +384,7 @@ where
 pub struct AttributeMap<'a, V> {
     pub projection: &'a Projection<'a, V>,
     pub map: Vec<(&'a AttributeName<'a>, DatomSet)>,
-    // pub limit: i64,
+    pub limit: i64,
 }
 
 #[derive(Debug)]

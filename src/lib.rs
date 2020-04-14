@@ -1,8 +1,8 @@
 //! How is this organized?
 //!
 //! - lib.rs - Session & Datom
-//! - dialog.rs - mostly tests; Pattern 3-tuple of ?t/T
 //! - matter.rs - Projection? Borrows patterns into datom sets & constraints
+//!             - 3-tuple of variable or entity, variable or attribute, variable or value
 //! - sql.rs - render a SQL query for a Projection
 //!
 //! The names are terrible, iirc there are two interesting ways to view a list
@@ -62,7 +62,6 @@
 #![allow(unused_variables)]
 // ^^^ todo; get your shit together ^^^
 
-mod dialogue;
 mod matter;
 mod sql;
 
@@ -71,14 +70,14 @@ use std::{
     borrow::{Borrow, Cow},
     fmt,
     ops::Deref,
+    str::FromStr,
 };
 
 use rusqlite::types::Value as SqlValue;
 
 use anyhow::Context;
 
-pub use dialogue::Pattern;
-pub use matter::{Projection, Selection};
+pub use matter::{Pattern, Projection, Selection};
 
 pub(crate) const SCHEMA: &'static str = include_str!("../schema.sql");
 
@@ -133,11 +132,6 @@ where
     fn affinity(&self) -> Affinity {
         Affinity::Other(0)
     }
-}
-
-/// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
-pub struct Session<'tx> {
-    tx: &'tx rusqlite::Transaction<'tx>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -309,6 +303,11 @@ where
     }
 }
 
+/// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
+pub struct Session<'tx> {
+    tx: &'tx rusqlite::Transaction<'tx>,
+}
+
 impl<'tx> Session<'tx> {
     pub fn new(tx: &'tx rusqlite::Transaction) -> Self {
         Session { tx }
@@ -419,7 +418,7 @@ impl<'tx> Session<'tx> {
     fn find<T>(
         &self,
         top: &str,
-        terms: Vec<dialogue::Pattern<'_, T>>,
+        terms: Vec<Pattern<'_, T>>,
     ) -> anyhow::Result<Vec<HashMap<String, Value<T>>>>
     where
         // T: Valuable + fmt::Debug,
@@ -546,13 +545,6 @@ where
 mod tests {
     use super::*;
     use anyhow::Result;
-
-    // struct Film {
-    //     // #[oof("film/title")]
-    //     title: String,
-    //     year: u16,
-    //     rating: f32,
-    // }
 
     pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
@@ -729,11 +721,12 @@ mod tests {
             "book/isbn".into(),
             "book/avg-rating".into(),
         ];
-        let s = p.attribute_map("b", &attrs);
+        let mut attrs_map = p.attribute_map("b", &attrs);
+        attrs_map.limit = 4;
 
-        eprintln!("{:#?}", s);
+        eprintln!("{:#?}", attrs_map);
         let mut q = sql::Query::default();
-        sql::attribute_map_sql(&s, &mut q).unwrap();
+        sql::attribute_map_sql(&attrs_map, &mut q).unwrap();
         eprintln!("{}", q);
         eprintln!("{:?}", q.params());
 
@@ -741,7 +734,8 @@ mod tests {
 
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
-            s.map
+            attrs_map
+                .map
                 .iter()
                 .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
                     let value = match c.get()? {

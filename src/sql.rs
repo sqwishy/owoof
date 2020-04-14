@@ -241,11 +241,16 @@ where
 
     projection_sql(s.projection, query)?;
 
-    if s.limit > 0 {
-        query.push_str(" LIMIT ?\n");
-        query.add_param(&s.limit as &dyn ToSqlDebug);
-    }
+    limit_sql(&s.limit, query)?;
 
+    Ok(())
+}
+
+pub fn limit_sql<'a>(limit: &'a i64, query: &mut GenericQuery<&'a dyn ToSqlDebug>) -> fmt::Result {
+    if *limit > 0 {
+        query.push_str(" LIMIT ?\n");
+        query.add_param(limit as &dyn ToSqlDebug);
+    }
     Ok(())
 }
 
@@ -269,6 +274,8 @@ where
     }
 
     projection_sql(attrs.projection, query)?;
+
+    limit_sql(&attrs.limit, query)?;
 
     Ok(())
 }

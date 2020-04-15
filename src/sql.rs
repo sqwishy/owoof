@@ -247,6 +247,29 @@ where
     Ok(())
 }
 
+pub fn order_by_sql<W: Write>(
+    order_by: &Vec<(matter::Location, matter::Ordering)>,
+    w: &mut W,
+) -> fmt::Result {
+    let pre = std::iter::once("ORDER BY ").chain(std::iter::repeat(", "));
+    for (pre, (term_location, ordering)) in pre.zip(order_by.iter()) {
+        write!(
+            w,
+            "{pre}{col}{ord}",
+            pre = pre,
+            col = location(term_location),
+            ord = match ordering {
+                matter::Ordering::Asc => " ASC",
+                matter::Ordering::Desc => " DESC",
+            }
+        )?;
+    }
+    if !order_by.is_empty() {
+        write!(w, "\n")?
+    }
+    Ok(())
+}
+
 pub fn limit_sql<'a>(limit: &'a i64, query: &mut GenericQuery<&'a dyn ToSqlDebug>) -> fmt::Result {
     if *limit > 0 {
         query.push_str(" LIMIT ?\n");
@@ -275,6 +298,8 @@ where
     }
 
     projection_sql(attrs.projection, query)?;
+
+    order_by_sql(&attrs.order_by, query)?;
 
     limit_sql(&attrs.limit, query)?;
 

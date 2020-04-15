@@ -268,11 +268,11 @@ pub enum Value {
     Entity(EntityName),
     // Attribute(AttributeName), // this is hard because L I F E T I M E
     Null,
+    // DateTime(chrono::DateTime<chrono::Utc>),
     Text(String),
     Blob(Vec<u8>),
     Integer(i64),
     Real(f64),
-    // DateTime(chrono::DateTime<chrono::Utc>),
 }
 
 impl From<Entity> for Value {
@@ -371,7 +371,8 @@ pub struct Session<'db> {
 impl<'db> Session<'db> {
     pub fn new(db: &'db mut rusqlite::Connection) -> rusqlite::Result<Self> {
         let tx = db.transaction()?;
-        // This view will exist on the connection, so guard with IF NOT EXISTS.
+        // This view will be attached to the lifetime of the connection, not the transaction ...
+        // ... so guard with IF NOT EXISTS.
         tx.execute(
             &format!(
                 "CREATE TEMPORARY VIEW IF NOT EXISTS
@@ -560,8 +561,8 @@ mod tests {
             let isbn = s.new_attribute("book/isbn")?;
             let authors = s.new_attribute("book/authors")?;
 
-            let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/books.csv")?;
-            for result in r.deserialize().take(2000) {
+            let mut r = csv::Reader::from_path("goodbooks-10k/books.csv")?;
+            for result in r.deserialize().take(4000) {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
@@ -579,8 +580,8 @@ mod tests {
             let book = s.new_attribute("rating/book")?;
             let user = s.new_attribute("rating/user")?;
 
-            let mut r = csv::Reader::from_path("/home/sqwishy/src/goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(5000) {
+            let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
+            for result in r.deserialize().take(8000) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -654,6 +655,9 @@ mod tests {
             "book/avg-rating".into(),
         ];
         let mut attrs_map = p.attribute_map("b", &attrs);
+        attrs_map
+            .order_by
+            .push(attrs_map.map[2].1.value_field().desc());
         attrs_map.limit = 12;
 
         // eprintln!("{:#?}", attrs_map);
@@ -683,7 +687,7 @@ mod tests {
         let wow = rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, Value>>>>()?;
 
         let jaysons = serde_json::to_string_pretty(&wow)?;
-        eprintln!("{}", jaysons);
+        println!("{}", jaysons);
 
         Ok(())
     }

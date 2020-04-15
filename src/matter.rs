@@ -8,21 +8,21 @@ const ANONYMOUS: &'static str = "";
 pub struct DatomSet(pub usize);
 
 impl DatomSet {
-    fn entity_field(self) -> Location {
+    pub fn entity_field(self) -> Location {
         Location {
             datomset: self,
             field: Field::Entity,
         }
     }
 
-    fn attribute_field(self) -> Location {
+    pub fn attribute_field(self) -> Location {
         Location {
             datomset: self,
             field: Field::Attribute,
         }
     }
 
-    fn value_field(self) -> Location {
+    pub fn value_field(self) -> Location {
         Location {
             datomset: self,
             field: Field::Value,
@@ -433,8 +433,25 @@ where
         AttributeMap {
             map,
             projection: self,
+            order_by: vec![],
             limit: 0,
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum Ordering {
+    Asc,
+    Desc,
+}
+
+impl Location {
+    pub fn asc(self) -> (Location, Ordering) {
+        (self, Ordering::Asc)
+    }
+
+    pub fn desc(self) -> (Location, Ordering) {
+        (self, Ordering::Desc)
     }
 }
 
@@ -443,6 +460,7 @@ pub struct AttributeMap<'a, V> {
     pub projection: &'a Projection<'a, V>,
     /// This is ordered, corresponding to query row column order
     pub map: Vec<(&'a AttributeName<'a>, DatomSet)>,
+    pub order_by: Vec<(Location, Ordering)>,
     pub limit: i64,
 }
 
@@ -452,15 +470,6 @@ pub struct Selection<'a, V> {
     pub columns: Vec<Location>,
     pub limit: i64,
 }
-
-// impl<'a, V> From<Projection<'a, V>> for Selection<'a, V> {
-//     fn from(projection: Projection<'a, V>) -> Self {
-//         Selection {
-//             projection,
-//             columns: vec![],
-//         }
-//     }
-// }
 
 impl<'a, V> Selection<'a, V> {
     pub fn new(projection: &'a Projection<'a, V>) -> Self {

@@ -634,7 +634,8 @@ mod tests {
         let patterns = vec![
             // pat!(?r "rating/book" ?b),
             pat!(?b "book/avg-rating" ?v),
-            pat!(?b "book/title" ?t),
+            // pat!(?b "book/title" ?t),
+            // pat!(?b ?a ?x),
         ];
         let max_rating = 4.0.into();
 

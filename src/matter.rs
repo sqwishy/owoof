@@ -110,18 +110,64 @@ pub struct Pattern<'a, V> {
 macro_rules! pat {
     (?$e:ident $a:tt ?$v:ident) => {{
        $crate::matter::Pattern {
-            entity: pat!(:var $e),
-            attribute: pat!(:val $a),
-            value: pat!(:var $v),
+            entity: _varorval!(:var $e),
+            attribute: _varorval!(:val $a),
+            value: _varorval!(:var $v),
+        }
+    }};
+    (?$e:ident ?$a:ident $v:tt) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:var $e),
+            attribute: _varorval!(:var $a),
+            value: _varorval!(:val $v),
         }
     }};
     (?$e:ident $a:tt $v:tt) => {{
        $crate::matter::Pattern {
-            entity: pat!(:var $e),
-            attribute: pat!(:val $a),
-            value: pat!(:val $v),
+            entity: _varorval!(:var $e),
+            attribute: _varorval!(:val $a),
+            value: _varorval!(:val $v),
         }
     }};
+    (?$e:ident ?$a:ident ?$v:ident) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:var $e),
+            attribute: _varorval!(:var $a),
+            value: _varorval!(:var $v),
+        }
+    }};
+    ($e:tt $a:tt ?$v:ident) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:val $e),
+            attribute: _varorval!(:val $a),
+            value: _varorval!(:var $v),
+        }
+    }};
+    ($e:tt ?$a:ident $v:tt) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:val $e),
+            attribute: _varorval!(:var $a),
+            value: _varorval!(:val $v),
+        }
+    }};
+    ($e:tt $a:tt $v:tt) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:val $e),
+            attribute: _varorval!(:val $a),
+            value: _varorval!(:val $v),
+        }
+    }};
+    ($e:tt ?$a:ident ?$v:ident) => {{
+       $crate::matter::Pattern {
+            entity: _varorval!(:val $e),
+            attribute: _varorval!(:var $a),
+            value: _varorval!(:var $v),
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! _varorval {
     (:var $v:ident) => {
         $crate::matter::VariableOr::Variable(stringify!($v).into())
     };
@@ -322,6 +368,13 @@ where
         }
     }
 
+    fn constrain_field<I>(&mut self, location: Location, i: I)
+    where
+        I: Into<Concept<'a, V>>,
+    {
+        self.constrain(location.constrained_to(i))
+    }
+
     pub fn add_patterns(&mut self, patterns: &'a Vec<Pattern<V>>) {
         for pattern in patterns {
             self.add_pattern(pattern);
@@ -371,17 +424,31 @@ where
                 datomset
             }
 
-            // // a b c
-            // Pattern {
-            //     attribute: Variable(a),
-            //     ..
-            // } => todo!("variable attribute {:?}", pattern),
-
-            // // "some-hyphenated-uuid" :person/name b
-            // Pattern {
-            //     entity: Value(e), ..
-            // } => todo!("explicit entity {:?}", pattern),
-            _ => todo!("{:?}", pattern),
+            // TODO remove the above if this handles cases generally?
+            Pattern {
+                entity,
+                attribute,
+                value,
+            } => {
+                let datomset = self.add_datomset();
+                match entity {
+                    VariableOr::Variable(e) => self.constrain_variable(e, datomset.entity_field()),
+                    VariableOr::Value(e) => self.constrain_field(datomset.entity_field(), e),
+                };
+                match attribute {
+                    VariableOr::Variable(a) => {
+                        self.constrain_variable(a, datomset.attribute_field())
+                    }
+                    VariableOr::Value(a) => self.constrain_field(datomset.attribute_field(), a),
+                };
+                match value {
+                    VariableOr::Variable(v) => self.constrain_variable(v, datomset.value_field()),
+                    VariableOr::Value(v) => {
+                        self.constrain_field(datomset.value_field(), Concept::Value(v))
+                    }
+                };
+                datomset
+            }
         }
     }
 

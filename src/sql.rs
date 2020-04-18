@@ -233,7 +233,6 @@ where
         let col_str = match l.field {
             Field::Entity => read_entity(&location(l)),
             Field::Attribute => read_attribute(&location(l)),
-            // TODO read the T/affinity field also?
             Field::Value => read_value(&datomset_t(l.datomset), &datomset_v(l.datomset)),
         };
         query.push_str(&col_str);

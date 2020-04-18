@@ -383,73 +383,32 @@ where
 
     // TODO, does this actually have to borrow pattern like this or just Pattern<'p, ..>?
     pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p Pattern<V>) -> DatomSet {
-        match pattern {
-            // a :person/name "Spongebob"
-            Pattern {
-                entity: VariableOr::Variable(e),
-                attribute: VariableOr::Value(a),
-                value: VariableOr::Value(v),
-            } => {
-                let datomset = self.add_datomset();
+        let Pattern {
+            entity,
+            attribute,
+            value,
+        } = pattern;
 
-                // constrain the entity ...
-                self.constrain_variable(e, datomset.entity_field());
-
-                // constrain the attribute ...
-                self.constrain(datomset.attribute_field().constrained_to(a));
-
-                // ... and value
-                self.constrain(datomset.value_field().constrained_to(Concept::Value(v)));
-
-                datomset
-            }
-
-            // a :person/name b
-            Pattern {
-                entity: VariableOr::Variable(e),
-                attribute: VariableOr::Value(a),
-                value: VariableOr::Variable(v),
-            } => {
-                let datomset = self.add_datomset();
-
-                // constrain the entity ...
-                self.constrain_variable(e, datomset.entity_field());
-
-                // constrain the attribute ...
-                self.constrain(datomset.attribute_field().constrained_to(a));
-
-                // ... and the value
-                self.constrain_variable(v, datomset.value_field());
-
-                datomset
-            }
-
-            // TODO remove the above if this handles cases generally?
-            Pattern {
-                entity,
-                attribute,
-                value,
-            } => {
-                let datomset = self.add_datomset();
-                match entity {
-                    VariableOr::Variable(e) => self.constrain_variable(e, datomset.entity_field()),
-                    VariableOr::Value(e) => self.constrain_field(datomset.entity_field(), e),
-                };
-                match attribute {
-                    VariableOr::Variable(a) => {
-                        self.constrain_variable(a, datomset.attribute_field())
-                    }
-                    VariableOr::Value(a) => self.constrain_field(datomset.attribute_field(), a),
-                };
-                match value {
-                    VariableOr::Variable(v) => self.constrain_variable(v, datomset.value_field()),
-                    VariableOr::Value(v) => {
-                        self.constrain_field(datomset.value_field(), Concept::Value(v))
-                    }
-                };
-                datomset
-            }
-        }
+        let datomset = self.add_datomset();
+        let entity_field = datomset.entity_field();
+        let attribute_field = datomset.attribute_field();
+        let value_field = datomset.value_field();
+        // constrain the entity ...
+        match entity {
+            VariableOr::Variable(e) => self.constrain_variable(e, entity_field),
+            VariableOr::Value(e) => self.constrain_field(entity_field, e),
+        };
+        // constrain the attribute ...
+        match attribute {
+            VariableOr::Variable(a) => self.constrain_variable(a, attribute_field),
+            VariableOr::Value(a) => self.constrain_field(attribute_field, a),
+        };
+        // ... and the value
+        match value {
+            VariableOr::Variable(v) => self.constrain_variable(v, value_field),
+            VariableOr::Value(v) => self.constrain_field(value_field, Concept::Value(v)),
+        };
+        datomset
     }
 
     pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, V>) {
@@ -460,7 +419,8 @@ where
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
-        // Attempt to reuse datomsets where the `top` is constrained to the datomset entity
+        // Attempt to reuse datomsets where the datomset entity is
+        // constrained to the `top` variable...
         let top_datoms = self
             .variable_locations(top)
             .filter(|l| l.field == Field::Entity)
@@ -470,12 +430,13 @@ where
         let map = attrs
             .into_iter()
             .map(|attr| {
-                // Search the datomsets for top for one that is constrained to the attribute...
+                // Search the datomsets where `top` is an entity of
+                // and find one constrained to this attribute...
                 let exists: Option<DatomSet> = top_datoms
                     .iter()
                     .find(|datomset| {
                         let datomset_attr = datomset.attribute_field();
-                        self.constraints().iter().any(move |c| match c {
+                        self.constraints().iter().any(|c| match c {
                             Constraint {
                                 lh,
                                 op: ConstraintOp::Eq,

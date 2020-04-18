@@ -260,19 +260,33 @@ pub trait FromAffinityValue {
     ) -> rusqlite::types::FromSqlResult<Self>
     where
         Self: Sized;
+
+    fn read_affinity_value<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
+    where
+        Self: Sized,
+    {
+        let affinity = Affinity::try_from(c.get::<i64>()?)
+            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
+            .map_err(|e| rusqlite::types::FromSqlError::Other(e))?;
+        let v_ref = c.get_raw();
+        let v = Self::from_affinity_value(affinity, v_ref)?;
+        Ok(v)
+    }
 }
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Value {
+    /// Anything that looks like a uuid ends up in here
     Entity(EntityName),
+    Attribute(String),
     // Attribute(AttributeName), // this is hard because L I F E T I M E
     Null,
+    Integer(i64),
+    Real(f64),
     // DateTime(chrono::DateTime<chrono::Utc>),
     Text(String),
     Blob(Vec<u8>),
-    Integer(i64),
-    Real(f64),
 }
 
 impl From<Entity> for Value {
@@ -304,9 +318,8 @@ impl FromAffinityValue for Value {
         use rusqlite::types::FromSql;
         Ok(match t {
             Affinity::Entity => Value::Entity(EntityName(uuid::Uuid::column_result(v)?)),
-            // Affinity::Attribute => todo!("attribute variant in Value enum"),
-            Affinity::Attribute => Value::Text(String::column_result(v)?),
-            _ => Value::from(rusqlite::types::Value::column_result(v)?),
+            Affinity::Attribute => Value::Attribute(String::column_result(v)?),
+            Affinity::Other(_) => Value::from(rusqlite::types::Value::column_result(v)?),
         })
     }
 }
@@ -354,11 +367,7 @@ impl<'a, T> Datom<'a, T> {
     {
         let e = EntityName(c.get()?);
         let a = AttributeName(c.get::<String>()?.into());
-        let affinity = Affinity::try_from(c.get::<i64>()?)
-            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
-            .map_err(|e| rusqlite::types::FromSqlError::Other(e))?;
-        let v_ref = c.get_raw();
-        let v = T::from_affinity_value(affinity, v_ref)?;
+        let v = T::read_affinity_value(c)?;
         Ok(Datom::from_eav(e, a, v))
     }
 }
@@ -465,7 +474,7 @@ impl<'db> Session<'db> {
     {
         // TODO this ignores the t value
         let sql = r#"
-            SELECT entities.uuid, attributes.ident, 0, v
+            SELECT entities.uuid, attributes.ident, t, v
               FROM datoms
               JOIN entities   ON datoms.e = entities.rowid
               JOIN attributes ON datoms.a = attributes.rowid"#;
@@ -485,10 +494,11 @@ impl<'db> Session<'db> {
             s.columns()
                 .iter()
                 .map(|loc| -> rusqlite::Result<Value> {
+                    use matter::Field;
                     Ok(match loc.field {
-                        matter::Field::Entity => Value::Entity(EntityName(c.get()?)),
-                        matter::Field::Attribute => todo!(), // Value::Attribute(AttributeName(c.get()?)),
-                        matter::Field::Value => Value::from(c.get::<rusqlite::types::Value>()?),
+                        Field::Entity => Value::Entity(EntityName(c.get()?)),
+                        Field::Attribute => Value::Attribute(c.get()?),
+                        Field::Value => Value::read_affinity_value(&mut c)?,
                     })
                 })
                 .collect::<rusqlite::Result<Vec<Value>>>()
@@ -635,7 +645,6 @@ mod tests {
             // pat!(?r "rating/book" ?b),
             pat!(?b "book/avg-rating" ?v),
             // pat!(?b "book/title" ?t),
-            // pat!(?b ?a ?x),
         ];
         let max_rating = 4.0.into();
 
@@ -675,11 +684,7 @@ mod tests {
                 .map
                 .iter()
                 .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-                    let value = match c.get()? {
-                        T_ENTITY => Value::Entity(EntityName(c.get()?)),
-                        T_ATTRIBUTE => todo!("attribute variant in Value enum"),
-                        _ => Value::from(c.get::<rusqlite::types::Value>()?),
-                    };
+                    let value = Value::read_affinity_value(&mut c)?;
                     Ok((*attr, value))
                 })
                 .collect::<rusqlite::Result<HashMap<_, _>>>()

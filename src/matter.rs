@@ -419,6 +419,9 @@ where
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
+        // TODO hrm .....
+        let top = if top == ANONYMOUS { "_" } else { top };
+
         // Attempt to reuse datomsets where the datomset entity is
         // constrained to the `top` variable...
         let top_datoms = self

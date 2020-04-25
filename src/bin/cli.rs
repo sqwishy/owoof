@@ -206,7 +206,7 @@ fn main() {
         Err(e) => {
             eprintln!("{}\n", e);
             eprintln!(
-                "usage: {} [--db <path>] [<pattern>...] --map <map> [--limit <num>]",
+                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>]",
                 prog
             );
             eprintln!("       {} [--db <path>] assert", prog);
@@ -229,6 +229,12 @@ fn default_db_path() -> PathBuf {
     std::env::var_os("OOF_DB")
         .map(PathBuf::from)
         .unwrap_or("oof.sqlite".into())
+}
+
+fn default_limit() -> i64 {
+    std::env::var("OOF_LIMIT")
+        .map(|s| s.parse().expect("parse OOF_LIMIT environment variable"))
+        .unwrap_or(10)
 }
 
 fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a>, ArgError<'a>> {
@@ -286,8 +292,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
                 .map_err(|e| anyhow::format_err!("could not parse i64: {}", e))
                 .map_err(ArgError::invalid("--limit"))
         })
-        .transpose()?
-        .unwrap_or_default();
+        .unwrap_or_else(|| Ok(default_limit()))?;
 
     return Ok(Command::Query {
         path,

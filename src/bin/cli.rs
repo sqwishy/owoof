@@ -143,17 +143,20 @@ impl<'a> Command<'a> {
                 let mut sess = oof::Session::new(&mut conn)?;
 
                 let mut stdin = std::io::stdin();
-                let stuff: Woo<std::collections::HashMap<oof::AttributeName, oof::Value>> =
+                let stuff: OwO<std::collections::HashMap<oof::AttributeName, oof::Value>> =
                     serde_json::from_reader(&mut stdin)?;
 
                 match stuff {
-                    Woo::Many(stuff) => eprintln!("{:?}", stuff),
-                    Woo::One(stuff) => eprintln!("{:?}", stuff),
+                    OwO::Many(stuff) => todo!("{:?}", stuff),
+                    OwO::One(stuff) => {
+                        let ent = sess.assert_obj(&stuff)?;
+                        eprintln!("wow: {:?}", ent);
+                    }
                 };
 
                 #[derive(serde::Deserialize)]
                 #[serde(untagged)]
-                enum Woo<T> {
+                enum OwO<T> {
                     Many(Vec<T>),
                     One(T),
                 }

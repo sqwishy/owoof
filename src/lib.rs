@@ -91,9 +91,8 @@ pub(crate) const T_ENTITY: i64 = -1;
 pub(crate) const T_ATTRIBUTE: i64 = -2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
 #[repr(transparent)]
-pub struct EntityName(uuid::Uuid);
+pub struct EntityName(#[serde(deserialize_with = "deserialize_with_entity_prefix")] uuid::Uuid);
 
 impl Deref for EntityName {
     type Target = uuid::Uuid;
@@ -121,7 +120,9 @@ impl rusqlite::ToSql for EntityName {
 #[derive(Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 #[repr(transparent)]
-pub struct AttributeName<'a>(Cow<'a, str>);
+pub struct AttributeName<'a>(
+    #[serde(deserialize_with = "deserialize_cow_with_attribute_prefix")] Cow<'a, str>,
+);
 
 impl<'a> Deref for AttributeName<'a> {
     type Target = str;
@@ -165,7 +166,7 @@ impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
-    pub rowid: i64,
+    rowid: i64,
     pub name: EntityName,
 }
 
@@ -287,12 +288,12 @@ pub trait FromAffinityValue {
 pub enum Value {
     /// Anything that looks like a uuid ends up in here
     Entity(EntityName),
+    #[serde(deserialize_with = "deserialize_with_attribute_prefix")]
     Attribute(String),
-    // Attribute(AttributeName), // this is hard because L I F E T I M E
     Null,
     Integer(i64),
     Real(f64),
-    // DateTime(chrono::DateTime<chrono::Utc>),
+    // Instant(chrono::DateTime<chrono::Utc>),
     Text(String),
     Blob(Vec<u8>),
 }
@@ -359,6 +360,46 @@ impl rusqlite::ToSql for Value {
 }
 
 impl Value {}
+
+pub fn deserialize_with_entity_prefix<'de, D>(deserializer: D) -> Result<uuid::Uuid, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let s = String::deserialize(deserializer)?;
+    if !s.starts_with('#') {
+        return Err(serde::de::Error::custom(format!(
+            "expected '#' found {}",
+            s.get(0..1).unwrap_or("nothing")
+        )));
+    }
+    let (_, uuid) = s.split_at(1);
+    return uuid.parse().map_err(serde::de::Error::custom);
+}
+
+pub fn deserialize_with_attribute_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let s = String::deserialize(deserializer)?;
+    if !s.starts_with(':') {
+        return Err(serde::de::Error::custom(format!(
+            "expected ':' found {}",
+            s.get(0..1).unwrap_or("nothing")
+        )));
+    }
+    return Ok(s);
+}
+
+pub fn deserialize_cow_with_attribute_prefix<'de, 'a, D>(
+    deserializer: D,
+) -> Result<Cow<'a, str>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_with_attribute_prefix(deserializer).map(Cow::from)
+}
 
 // pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
 
@@ -475,16 +516,31 @@ impl<'db> Session<'db> {
     }
 
     pub fn new_entity(&self) -> rusqlite::Result<Entity> {
-        // TODO should this create a entity/uuid datom to itself???
         let uuid = uuid::Uuid::new_v4();
+        self.new_entity_at(EntityName(uuid))
+    }
+
+    pub fn new_entity_at(&self, name: EntityName) -> rusqlite::Result<Entity> {
         let n = self.tx.execute(
             "INSERT INTO entities (uuid) VALUES (?)",
-            rusqlite::params![uuid],
+            rusqlite::params![name],
         )?;
         assert_eq!(n, 1);
-        let name = EntityName(uuid);
         let rowid = self.tx.last_insert_rowid();
         Ok(Entity { rowid, name })
+    }
+
+    pub fn find_entity(&self, name: EntityName) -> rusqlite::Result<Option<Entity>> {
+        use rusqlite::OptionalExtension;
+        self.tx
+            .query_row(
+                "SELECT rowid FROM entities WHERE uuid = ?",
+                rusqlite::params![name],
+                |row| row.get(0),
+            )
+            .optional()?
+            .map(|rowid| Ok(Entity { rowid, name }))
+            .transpose()
     }
 
     pub fn new_attribute<'a, S>(&self, ident: S) -> rusqlite::Result<Attribute<'a>>
@@ -502,6 +558,30 @@ impl<'db> Session<'db> {
         assert_eq!(n, 1);
 
         Ok(Attribute { entity, ident })
+    }
+
+    // todo implement for generic Assertable ToSql thing?
+    pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> rusqlite::Result<Entity> {
+        let entity_uuid = AttributeName::from(":entity/uuid");
+
+        // application-level upsert so that we can get the rowid if the entity exists
+        let entity = match obj.get(&entity_uuid) {
+            Some(Value::Entity(name)) => match self.find_entity(*name)? {
+                Some(entity) => entity,
+                None => self.new_entity_at(*name)?,
+            },
+            Some(_) => panic!("expected uuid for :entity/uuid"),
+            None => self.new_entity()?,
+        };
+
+        for (a, v) in obj.iter() {
+            if a == &entity_uuid {
+                continue;
+            }
+            self.assert(&entity, a, v)?;
+        }
+
+        Ok(entity)
     }
 
     pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> rusqlite::Result<()>
@@ -618,6 +698,41 @@ mod tests {
     use super::*;
     use anyhow::Result;
 
+    #[test]
+    fn deserialization() -> Result<()> {
+        use serde::{de::value::Error, de::IntoDeserializer, Deserialize};
+
+        assert_eq!(
+            value_from("#03b48f17-7f0a-455f-af1d-ba946f762090")?,
+            Value::Entity(
+                "03b48f17-7f0a-455f-af1d-ba946f762090"
+                    .parse()
+                    .map(EntityName)
+                    .unwrap()
+            )
+        );
+
+        assert_eq!(
+            value_from(":entity/uuid")?,
+            Value::Attribute(":entity/uuid".to_owned())
+        );
+
+        assert_eq!(
+            value_from("anything else")?,
+            Value::Text("anything else".to_owned())
+        );
+
+        fn value_from<T>(t: T) -> Result<Value, Error>
+        where
+            for<'de> T: IntoDeserializer<'de>,
+        {
+            let wat = IntoDeserializer::<Error>::into_deserializer(t);
+            Value::deserialize(wat)
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
         Session::init_schema(&mut conn)?;
@@ -729,7 +844,7 @@ mod tests {
             "book/isbn".into(),
             "book/avg-rating".into(),
         ];
-        let mut attrs = p.attribute_map("b", attrs);
+        let mut attrs = p.attribute_map("b", &attrs);
         attrs.order_by.push(attrs.map[2].1.value_field().desc());
         attrs.limit = 12;
 
@@ -748,7 +863,7 @@ mod tests {
                 .iter()
                 .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
                     let value = Value::read_affinity_value(&mut c)?;
-                    Ok((attr, value))
+                    Ok((*attr, value))
                 })
                 .collect::<rusqlite::Result<HashMap<_, _>>>()
         })?;

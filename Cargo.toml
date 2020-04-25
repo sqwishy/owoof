@@ -17,7 +17,7 @@ cli = ["serde_json"]
 serde = { version =  "1", features = ["derive"] }
 anyhow = "1"             # Flexible concrete Error type built on std::error::Error
 thiserror = "1"          # derive(Error)
-rusqlite = { version = "0.22", features = ["uuid", "functions"] }
+rusqlite = { version = "0.23", features = ["uuid", "functions"] }
 
 either = "1.5"                   # The enum `Either` with variants `Left` and `Right` is a general purpose sum type with two ca…
 

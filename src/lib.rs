@@ -124,6 +124,12 @@ pub struct AttributeName<'a>(
     #[serde(deserialize_with = "deserialize_cow_with_attribute_prefix")] Cow<'a, str>,
 );
 
+impl<'a> AttributeName<'a> {
+    fn from_static(s: &'static str) -> Self {
+        AttributeName::try_from(Cow::from(s)).unwrap()
+    }
+}
+
 impl<'a> Deref for AttributeName<'a> {
     type Target = str;
 
@@ -132,19 +138,48 @@ impl<'a> Deref for AttributeName<'a> {
     }
 }
 
-impl<'a, I> From<I> for AttributeName<'a>
-where
-    I: Into<Cow<'a, str>>,
-{
-    fn from(i: I) -> Self {
-        let cow: Cow<str> = i.into();
-        AttributeName(cow)
+impl From<&'static str> for AttributeName<'static> {
+    fn from(s: &'static str) -> Self {
+        AttributeName::from_static(s)
+    }
+}
+
+impl<'a> TryFrom<Cow<'a, str>> for AttributeName<'a> {
+    type Error = String;
+
+    fn try_from(s: Cow<'a, str>) -> Result<Self, Self::Error> {
+        if let Some(idx) = s.find(|s: char| s.is_ascii_whitespace()) {
+            return Err(format!("unexpected whitespace at {}", idx));
+        }
+
+        if !s.starts_with(":") {
+            if let Some(c) = s.get(0..1) {
+                return Err(format!("expected leading ':' found '{}'", c));
+            } else {
+                return Err("expected leading ':' found nothing".to_owned());
+            }
+        }
+
+        Ok(AttributeName(s))
     }
 }
 
 impl<'a> rusqlite::ToSql for AttributeName<'a> {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        self.0.to_sql()
+        let (colon, name) = self.0.split_at(1);
+        assert_eq!(colon, ":");
+        name.to_sql()
+    }
+}
+
+impl<'a> rusqlite::types::FromSql for AttributeName<'a> {
+    fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
+        value.as_str().map(|s| {
+            let mut n = String::with_capacity(1 + s.len());
+            n.push(':');
+            n.push_str(s);
+            AttributeName(Cow::from(n))
+        })
     }
 }
 
@@ -547,13 +582,13 @@ impl<'db> Session<'db> {
     where
         S: Into<AttributeName<'a>>,
     {
-        let ident = ident.into();
+        let ident: AttributeName = ident.into();
 
         let entity = self.new_entity()?;
 
         let n = self.tx.execute(
             "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![entity.rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &*ident],
+            rusqlite::params![entity.rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &ident],
         )?;
         assert_eq!(n, 1);
 
@@ -562,7 +597,7 @@ impl<'db> Session<'db> {
 
     // todo implement for generic Assertable ToSql thing?
     pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> rusqlite::Result<Entity> {
-        let entity_uuid = AttributeName::from(":entity/uuid");
+        let entity_uuid = AttributeName::from_static(":entity/uuid");
 
         // application-level upsert so that we can get the rowid if the entity exists
         let entity = match obj.get(&entity_uuid) {
@@ -675,6 +710,9 @@ where
 
     sql::attribute_map_sql(attrs, &mut q).unwrap();
 
+    eprintln!("[DEBUG] sql: {}", q.as_str());
+    eprintln!("[DEBUG] par: {:?}", q.params());
+
     let mut stmt = sess.tx.prepare(q.as_str())?;
 
     let rows = stmt.query_map(q.params(), |row| {
@@ -733,6 +771,19 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn attribute_sql() -> Result<()> {
+        use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+
+        let attr = AttributeName::from_static(":foo/bar");
+        assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);
+
+        let v = ValueRef::Text("foo/bar".as_bytes());
+        assert_eq!(attr, AttributeName::column_result(v)?);
+
+        Ok(())
+    }
+
     pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
         Session::init_schema(&mut conn)?;
@@ -746,10 +797,10 @@ mod tests {
         let mut books = HashMap::<i64, EntityName>::new();
 
         {
-            let title = s.new_attribute("book/title")?;
-            let avg_rating = s.new_attribute("book/avg-rating")?;
-            let isbn = s.new_attribute("book/isbn")?;
-            let authors = s.new_attribute("book/authors")?;
+            let title = s.new_attribute(":book/title")?;
+            let avg_rating = s.new_attribute(":book/avg-rating")?;
+            let isbn = s.new_attribute(":book/isbn")?;
+            let authors = s.new_attribute(":book/authors")?;
 
             let mut r = csv::Reader::from_path("goodbooks-10k/books.csv")?;
             for result in r.deserialize().take(4000) {
@@ -766,9 +817,9 @@ mod tests {
         }
 
         {
-            let score = s.new_attribute("rating/score")?; // aka one-to-five
-            let book = s.new_attribute("rating/book")?;
-            let user = s.new_attribute("rating/user")?;
+            let score = s.new_attribute(":rating/score")?; // aka one-to-five
+            let book = s.new_attribute(":rating/book")?;
+            let user = s.new_attribute(":rating/user")?;
 
             let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
             for result in r.deserialize().take(8000) {
@@ -823,7 +874,7 @@ mod tests {
 
         let patterns = vec![
             // pat!(?r "rating/book" ?b),
-            pat!(?b "book/avg-rating" ?v),
+            pat!(?b ":book/avg-rating" ?v),
             // pat!(?b "book/title" ?t),
         ];
         let max_rating = 4.0.into();
@@ -840,9 +891,9 @@ mod tests {
         // let book = p.variable("b").cloned().unwrap();
         let attrs = vec![
             // "entity/uuid".into(),
-            "book/title".into(),
-            "book/isbn".into(),
-            "book/avg-rating".into(),
+            AttributeName::from_static(":book/title"),
+            AttributeName::from_static(":book/isbn"),
+            AttributeName::from_static(":book/avg-rating"),
         ];
         let mut attrs = p.attribute_map("b", &attrs);
         attrs.order_by.push(attrs.map[2].1.value_field().desc());

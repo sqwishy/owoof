@@ -119,7 +119,7 @@ enum Command<'a> {
     },
     Query {
         path: PathBuf,
-        map: (&'a str, Vec<&'a str>),
+        map: (&'a str, Vec<oof::AttributeName<'a>>),
         patterns: Vec<oof::Pattern<'a, oof::Value>>,
         limit: i64,
     },
@@ -140,7 +140,7 @@ impl<'a> Command<'a> {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
                 )?;
-                let mut sess = oof::Session::new(&mut conn)?;
+                let sess = oof::Session::new(&mut conn)?;
 
                 let mut stdin = std::io::stdin();
                 let stuff: OwO<std::collections::HashMap<oof::AttributeName, oof::Value>> =
@@ -311,11 +311,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
 
             let attribute = parse_variable(a)
                 .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
-                .or_else(|_| {
-                    parse_attribute(a)
-                        .map(oof::AttributeName::from)
-                        .map(oof::VariableOr::Value)
-                })?;
+                .or_else(|_| parse_attribute(a).map(oof::VariableOr::Value))?;
 
             let value = parse_variable(v)
                 .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
@@ -331,7 +327,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
     }
 }
 
-fn parse_map<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<&'a str>)> {
+fn parse_map<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<oof::AttributeName<'a>>)> {
     let mut terms = s.split_ascii_whitespace().filter(|s| !s.is_empty());
     let var = match terms.next().map(parse_variable) {
         None => anyhow::bail!("variable expected, none found"),
@@ -351,9 +347,8 @@ fn parse_variable<'a>(s: &'a str) -> anyhow::Result<&'a str> {
     Ok(&s[1..])
 }
 
-fn parse_attribute<'a>(s: &'a str) -> anyhow::Result<&'a str> {
-    if !s.starts_with(":") {
-        anyhow::bail!("missing ':' prefix for {}", s)
-    }
-    Ok(&s[1..])
+fn parse_attribute<'a>(s: &'a str) -> anyhow::Result<oof::AttributeName<'a>> {
+    use std::borrow::Cow;
+    use std::convert::TryFrom;
+    oof::AttributeName::try_from(Cow::Borrowed(s)).map_err(anyhow::Error::msg)
 }

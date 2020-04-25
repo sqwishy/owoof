@@ -6,11 +6,18 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "cli"
+required-features = ["cli"]
+
+[features]
+cli = ["serde_json"]
+
 [dependencies]
 serde = { version =  "1", features = ["derive"] }
 anyhow = "1"             # Flexible concrete Error type built on std::error::Error
 thiserror = "1"          # derive(Error)
-rusqlite = { version = "0.21", features = ["uuid", "functions"] }
+rusqlite = { version = "0.22", features = ["uuid", "functions"] }
 
 either = "1.5"                   # The enum `Either` with variants `Left` and `Right` is a general purpose sum type with two ca…
 
@@ -23,6 +30,8 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # lazy_static = "1"
 # regex = "1"
+
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 csv = "1"

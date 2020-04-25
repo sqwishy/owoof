@@ -116,6 +116,7 @@ impl<T> GenericQuery<T> {
     }
 }
 
+// TODO XXX FIXME require V to be assertable so we can get an affinity from it?
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<'a, V>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,

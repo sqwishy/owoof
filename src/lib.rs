@@ -70,14 +70,13 @@ use std::{
     convert::TryFrom,
     fmt,
     ops::Deref,
-    str::FromStr,
 };
 
 // use rusqlite::types::Value as SqlValue;
 
 use anyhow::Context;
 
-pub use matter::{Pattern, Projection, Selection};
+pub use matter::{Pattern, Projection, Selection, VariableOr};
 
 pub(crate) const SCHEMA: &'static str = include_str!("../schema.sql");
 
@@ -101,6 +100,15 @@ impl Deref for EntityName {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<I> From<I> for EntityName
+where
+    I: Into<uuid::Uuid>,
+{
+    fn from(i: I) -> Self {
+        EntityName(i.into())
     }
 }
 
@@ -324,6 +332,32 @@ impl FromAffinityValue for Value {
     }
 }
 
+impl Assertable for Value {
+    fn affinity(&self) -> Affinity {
+        match self {
+            Value::Entity(_) => Affinity::Entity,
+            Value::Attribute(_) => Affinity::Attribute,
+            Value::Null | Value::Integer(_) | Value::Real(_) | Value::Text(_) | Value::Blob(_) => {
+                Affinity::Other(0)
+            }
+        }
+    }
+}
+
+impl rusqlite::ToSql for Value {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+        match self {
+            Value::Entity(v) => v.to_sql(),
+            Value::Attribute(v) => v.to_sql(),
+            Value::Null => rusqlite::types::Null.to_sql(),
+            Value::Integer(v) => v.to_sql(),
+            Value::Real(v) => v.to_sql(),
+            Value::Text(v) => v.to_sql(),
+            Value::Blob(v) => v.to_sql(),
+        }
+    }
+}
+
 impl Value {}
 
 // pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
@@ -392,6 +426,48 @@ impl<'db> Session<'db> {
             rusqlite::NO_PARAMS,
         )?;
         Ok(Session { tx })
+    }
+
+    pub fn init_schema(db: &'db mut rusqlite::Connection) -> rusqlite::Result<()> {
+        let tx = db.transaction()?;
+        tx.execute_batch(SCHEMA)?;
+
+        // Create the initial attributes, this isn't part of SCHEMA because sqlite can't make its
+        // own UUIDs (unless we just use random 128 bit blobs ...) and I'm avoiding database
+        // functions for now.
+
+        // entity/uuid & attr/ident
+        tx.execute(
+            "INSERT INTO entities (rowid, uuid) VALUES (?, ?), (?, ?)",
+            rusqlite::params![
+                ENTITY_UUID_ROWID,
+                uuid::Uuid::new_v4(),
+                ATTR_IDENT_ROWID,
+                uuid::Uuid::new_v4(),
+            ],
+        )
+        .map(|n| assert_eq!(n, 2))?;
+
+        tx.execute(
+            "INSERT INTO datoms (e, a, t, v)
+                  VALUES (?, ?, ?, ?)
+                       , (?, ?, ?, ?)",
+            rusqlite::params![
+                ENTITY_UUID_ROWID, // the entity/uuid attribute's rowid
+                ATTR_IDENT_ROWID,  // has a attr/ident attribue
+                T_ATTRIBUTE,       //
+                "entity/uuid",     // of this string
+                ATTR_IDENT_ROWID,
+                ATTR_IDENT_ROWID,
+                T_ATTRIBUTE,
+                "attr/ident",
+            ],
+        )
+        .map(|n| assert_eq!(n, 2))?;
+
+        tx.commit()?;
+
+        Ok(())
     }
 
     pub fn commit(self) -> rusqlite::Result<()> {
@@ -508,6 +584,35 @@ impl<'db> Session<'db> {
     }
 }
 
+pub fn query_attribute_map<'db, 'a, V>(
+    attrs: &matter::AttributeMap<'a, V>,
+    sess: &mut Session<'db>,
+) -> rusqlite::Result<Vec<HashMap<&'a AttributeName<'a>, V>>>
+where
+    V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+{
+    let mut q = sql::Query::default();
+
+    sql::attribute_map_sql(attrs, &mut q).unwrap();
+
+    let mut stmt = sess.tx.prepare(q.as_str())?;
+
+    let rows = stmt.query_map(q.params(), |row| {
+        let mut c = sql::RowCursor::from(row);
+        attrs
+            .map
+            .iter()
+            .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
+                let value = V::read_affinity_value(&mut c)?;
+                Ok((*attr, value))
+            })
+            .collect::<rusqlite::Result<HashMap<_, _>>>()
+    })?;
+
+    let wow = rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, _>>>>()?;
+    Ok(wow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,47 +620,7 @@ mod tests {
 
     pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
-        // conn.create_scalar_function("uuid_generate_v4", 0, false, move |_| {
-        //     Ok(uuid::Uuid::new_v4())
-        // })?;
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA)?;
-
-        // Create the initial attributes, this isn't part of SCHEMA because sqlite can't make its
-        // own UUIDs (unless we just use random 128 bit blobs ...) and I'm avoiding database
-        // functions for now.
-
-        // entity/uuid & attr/ident
-        tx.execute(
-            "INSERT INTO entities (rowid, uuid) VALUES (?, ?), (?, ?)",
-            rusqlite::params![
-                ENTITY_UUID_ROWID,
-                uuid::Uuid::new_v4(),
-                ATTR_IDENT_ROWID,
-                uuid::Uuid::new_v4(),
-            ],
-        )
-        .map(|n| assert_eq!(n, 2))?;
-
-        tx.execute(
-            "INSERT INTO datoms (e, a, t, v)
-                  VALUES (?, ?, ?, ?)
-                       , (?, ?, ?, ?)",
-            rusqlite::params![
-                ENTITY_UUID_ROWID, // the entity/uuid attribute's rowid
-                ATTR_IDENT_ROWID,  // has a attr/ident attribue
-                T_ATTRIBUTE,       //
-                "entity/uuid",     // of this string
-                ATTR_IDENT_ROWID,
-                ATTR_IDENT_ROWID,
-                T_ATTRIBUTE,
-                "attr/ident",
-            ],
-        )
-        .map(|n| assert_eq!(n, 2))?;
-
-        tx.commit()?;
-
+        Session::init_schema(&mut conn)?;
         Ok(conn)
     }
 
@@ -664,15 +729,13 @@ mod tests {
             "book/isbn".into(),
             "book/avg-rating".into(),
         ];
-        let mut attrs_map = p.attribute_map("b", &attrs);
-        attrs_map
-            .order_by
-            .push(attrs_map.map[2].1.value_field().desc());
-        attrs_map.limit = 12;
+        let mut attrs = p.attribute_map("b", attrs);
+        attrs.order_by.push(attrs.map[2].1.value_field().desc());
+        attrs.limit = 12;
 
         // eprintln!("{:#?}", attrs_map);
         let mut q = sql::Query::default();
-        sql::attribute_map_sql(&attrs_map, &mut q).unwrap();
+        sql::attribute_map_sql(&attrs, &mut q).unwrap();
         eprintln!("{}", q);
         eprintln!("{:?}", q.params());
 
@@ -680,12 +743,12 @@ mod tests {
 
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
-            attrs_map
+            attrs
                 .map
                 .iter()
                 .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
                     let value = Value::read_affinity_value(&mut c)?;
-                    Ok((*attr, value))
+                    Ok((attr, value))
                 })
                 .collect::<rusqlite::Result<HashMap<_, _>>>()
         })?;

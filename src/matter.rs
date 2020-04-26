@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashMap, fmt::Debug, iter};
 
 use crate::{AttributeName, EntityName};
 
-const ANONYMOUS: &'static str = "";
+const ANONYMOUS: &str = "";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DatomSet(pub usize);
@@ -285,7 +285,7 @@ impl<'a, V> Projection<'a, V>
 where
     V: Debug,
 {
-    pub fn from_patterns(patterns: &'a Vec<Pattern<V>>) -> Self {
+    pub fn from_patterns(patterns: &'a [Pattern<V>]) -> Self {
         let mut p = Self::default();
         p.add_patterns(patterns);
         p
@@ -356,12 +356,12 @@ where
     /// Register a variable at some location.
     /// If it was registered before, constraint the existing variable to the given location.
     ///
-    /// The anonymous variable (the empty string) is
+    /// Nothing happens if this receives the anonymous variable (the empty string).
+    /// TODO this may never be what anybody wants at all ever...
     fn constrain_variable(&mut self, variable: &'a str, location: Location) {
         if variable == ANONYMOUS {
-            return;
         } else if let Some(prior) = self.variable(variable) {
-            let equal_to_prior = location.constrained_to(prior.clone());
+            let equal_to_prior = location.constrained_to(*prior);
             self.constraints.push(equal_to_prior);
         } else {
             self.variables.insert(variable, location);
@@ -375,7 +375,7 @@ where
         self.constrain(location.constrained_to(i))
     }
 
-    pub fn add_patterns(&mut self, patterns: &'a Vec<Pattern<V>>) {
+    pub fn add_patterns(&mut self, patterns: &'a [Pattern<V>]) {
         for pattern in patterns {
             self.add_pattern(pattern);
         }
@@ -411,66 +411,105 @@ where
         datomset
     }
 
-    pub fn add_constraint<'c: 'a>(&mut self, c: Constraint<'a, V>) {
+    pub fn add_constraint(&mut self, c: Constraint<'a, V>) {
         self.constraints.push(c);
+    }
+
+    pub fn entity_group<'b>(&'b mut self, var: &'a str) -> Option<EntityGroup<'b, 'a, V>>
+    where
+        'a: 'b,
+    {
+        if var == ANONYMOUS {
+            return None;
+        }
+
+        let datoms = self
+            .variable_locations(var)
+            .filter(|l| l.field == Field::Entity)
+            .map(|l| l.datomset)
+            .collect::<Vec<_>>();
+
+        Some(EntityGroup {
+            projection: self,
+            var,
+            datoms,
+        })
     }
 
     pub fn attribute_map<I>(&'a mut self, top: &'a str, attrs: I) -> AttributeMap<'a, V>
     where
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
-        // TODO hrm .....
-        let top = if top == ANONYMOUS { "_" } else { top };
+        self.entity_group(top)
+            .expect("todo deanonymize variable")
+            .attribute_map(attrs)
+    }
+}
 
-        // Attempt to reuse datomsets where the datomset entity is
-        // constrained to the `top` variable...
-        let top_datoms = self
-            .variable_locations(top)
-            .filter(|l| l.field == Field::Entity)
-            .map(|l| l.datomset)
-            .collect::<Vec<_>>();
+pub struct EntityGroup<'a, 'p, V> {
+    projection: &'a mut Projection<'p, V>,
+    var: &'p str,
+    /// datoms where the entity is constrained to our variable
+    datoms: Vec<DatomSet>,
+}
 
+impl<'a, 'p, V> EntityGroup<'a, 'p, V>
+where
+    V: Debug,
+{
+    pub fn get_or_fetch_attribute<'t: 'p>(&mut self, attr: &'t AttributeName<'t>) -> DatomSet {
+        let p = &mut self.projection;
+
+        // Search our known datomsets where `top` is the entity
+        // to see if it's already constrained to this attribute...
+        let exists: Option<DatomSet> = self
+            .datoms
+            .iter()
+            .find(|datomset| {
+                p.constraints().iter().any(|c| match c {
+                    Constraint {
+                        lh,
+                        op: ConstraintOp::Eq,
+                        rh: Concept::Attribute(rh),
+                    } => lh == &datomset.attribute_field() && rh == &attr,
+                    _ => false,
+                })
+            })
+            .cloned();
+
+        if let Some(datomset) = exists {
+            return datomset;
+        }
+
+        // Create a new datomset that fetches this attribute value
+        let datomset = p.add_datomset();
+        p.constrain_variable(self.var, datomset.entity_field());
+        p.constrain(datomset.attribute_field().constrained_to(attr));
+        self.datoms.push(datomset);
+        return datomset;
+    }
+
+    // TODO I can't figure out how to do this without moving ...
+    // maybe there is no way? It's a little surprising.
+    pub fn attribute_map<'b: 'p, I>(mut self, attrs: I) -> AttributeMap<'a, V>
+    where
+        I: iter::IntoIterator<Item = &'b AttributeName<'b>>,
+    {
         let map = attrs
             .into_iter()
-            .map(|attr| {
-                // Search the datomsets where `top` is an entity of
-                // and find one constrained to this attribute...
-                let exists: Option<DatomSet> = top_datoms
-                    .iter()
-                    .find(|datomset| {
-                        let datomset_attr = datomset.attribute_field();
-                        self.constraints().iter().any(|c| match c {
-                            Constraint {
-                                lh,
-                                op: ConstraintOp::Eq,
-                                rh: Concept::Attribute(rh),
-                            } => *lh == datomset_attr && *rh == attr,
-                            _ => false,
-                        })
-                    })
-                    .cloned();
-                if let Some(datomset) = exists {
-                    return (attr, datomset);
-                }
-
-                // Create a new datomset that fetches this attribute value
-                let datomset = self.add_datomset();
-                self.constrain_variable(top, datomset.entity_field());
-                self.constrain(datomset.attribute_field().constrained_to(attr));
-                (attr, datomset)
-            })
+            .map(|attr| (attr, self.get_or_fetch_attribute(attr)))
             .collect();
 
         AttributeMap {
             map,
-            projection: self,
+            projection: self.projection,
             order_by: vec![],
             limit: 0,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Ordering {
     Asc,
     Desc,

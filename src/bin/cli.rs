@@ -121,6 +121,7 @@ enum Command<'a> {
         path: PathBuf,
         map: (&'a str, Vec<oof::AttributeName<'a>>),
         patterns: Vec<oof::Pattern<'a, oof::Value>>,
+        order: Vec<(oof::AttributeName<'a>, oof::Ordering)>,
         limit: i64,
     },
 }
@@ -167,6 +168,7 @@ impl<'a> Command<'a> {
                 path,
                 map: (map_var, map_attrs),
                 patterns,
+                order,
                 limit,
             } => {
                 let mut conn = rusqlite::Connection::open_with_flags(
@@ -176,13 +178,27 @@ impl<'a> Command<'a> {
                 )?;
                 let mut sess = oof::Session::new(&mut conn)?;
 
+                // todo this is a ridiculous step
                 let map_attrs: Vec<_> = map_attrs
                     .into_iter()
                     .map(oof::AttributeName::from)
                     .collect();
+
                 let mut p = oof::Projection::from_patterns(&patterns);
-                let mut attrs = p.attribute_map(map_var, &map_attrs);
+
+                let mut eg = p.entity_group(map_var).expect("todo deanonymize variable");
+
+                let order_by = order
+                    .iter()
+                    .map(|(attr, ord)| {
+                        let location = eg.get_or_fetch_attribute(attr).value_field();
+                        (location, *ord)
+                    })
+                    .collect();
+
+                let mut attrs = eg.attribute_map(&map_attrs);
                 attrs.limit = limit;
+                attrs.order_by = order_by;
 
                 let results = oof::query_attribute_map(&attrs, &mut sess)?;
 
@@ -206,7 +222,7 @@ fn main() {
         Err(e) => {
             eprintln!("{}\n", e);
             eprintln!(
-                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>]",
+                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>] [--asc <attr>] [--desc <attr>]",
                 prog
             );
             eprintln!("       {} [--db <path>] assert", prog);
@@ -239,6 +255,7 @@ fn default_limit() -> i64 {
 
 fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a>, ArgError<'a>> {
     let mut patterns = vec![];
+    let mut order = vec![];
     let mut db = Option::<&str>::None;
     let mut map = Option::<&str>::None;
     let mut limit = Option::<&str>::None;
@@ -271,6 +288,14 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
             "--limit" => {
                 limit = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
             }
+            "--asc" => {
+                let attr = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((attr, oof::Ordering::Asc));
+            }
+            "--desc" => {
+                let attr = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((attr, oof::Ordering::Desc));
+            }
             _ if arg.starts_with("-") => return Err(ArgError::Unknown(arg)),
             _ => patterns.push(arg),
         }
@@ -294,11 +319,24 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
         })
         .unwrap_or_else(|| Ok(default_limit()))?;
 
+    let order = order
+        .into_iter()
+        .map(|(attr, ord)| {
+            parse_attribute(attr)
+                .map(|attr| (attr, ord))
+                .map_err(ArgError::invalid(match ord {
+                    oof::Ordering::Asc => "--asc",
+                    oof::Ordering::Desc => "--desc",
+                }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     return Ok(Command::Query {
         path,
         map,
         limit,
         patterns,
+        order,
     });
 }
 

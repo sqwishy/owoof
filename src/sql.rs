@@ -1,3 +1,5 @@
+#![allow(clippy::write_with_newline)]
+
 use std::fmt::{self, Debug, Write};
 use std::ops::{Deref, DerefMut};
 
@@ -248,7 +250,7 @@ where
 }
 
 pub fn order_by_sql<W: Write>(
-    order_by: &Vec<(matter::Location, matter::Ordering)>,
+    order_by: &[(matter::Location, matter::Ordering)],
     w: &mut W,
 ) -> fmt::Result {
     let pre = std::iter::once("ORDER BY ").chain(std::iter::repeat(", "));
@@ -326,7 +328,7 @@ pub(crate) const fn bind_entity() -> &'static str {
 }
 
 pub(crate) fn read_entity(col: &str) -> String {
-    format!("(SELECT uuid  FROM entities   WHERE rowid = {})", col).into()
+    format!("(SELECT uuid  FROM entities   WHERE rowid = {})", col)
 }
 
 pub(crate) const fn bind_attribute() -> &'static str {
@@ -334,7 +336,7 @@ pub(crate) const fn bind_attribute() -> &'static str {
 }
 
 pub(crate) fn read_attribute(col: &str) -> String {
-    format!("(SELECT ident FROM attributes WHERE rowid = {})", col).into()
+    format!("(SELECT ident FROM attributes WHERE rowid = {})", col)
 }
 
 pub struct RowCursor<'a> {

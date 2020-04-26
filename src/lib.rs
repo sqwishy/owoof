@@ -60,6 +60,9 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 // ^^^ todo; get your shit together ^^^
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::redundant_closure)]
+#![allow(clippy::needless_return)]
 
 mod matter;
 mod sql;
@@ -76,9 +79,9 @@ use std::{
 
 use anyhow::Context;
 
-pub use matter::{Pattern, Projection, Selection, VariableOr};
+pub use matter::{Ordering, Pattern, Projection, Selection, VariableOr};
 
-pub(crate) const SCHEMA: &'static str = include_str!("../schema.sql");
+pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
 
 /// Hard coded entity row ID for attribute of the identifier "entity/uuid" ...
 pub(crate) const ENTITY_UUID_ROWID: i64 = -1;
@@ -152,7 +155,7 @@ impl<'a> TryFrom<Cow<'a, str>> for AttributeName<'a> {
             return Err(format!("unexpected whitespace at {}", idx));
         }
 
-        if !s.starts_with(":") {
+        if !s.starts_with(':') {
             if let Some(c) = s.get(0..1) {
                 return Err(format!("expected leading ':' found '{}'", c));
             } else {
@@ -184,17 +187,17 @@ impl<'a> rusqlite::types::FromSql for AttributeName<'a> {
 }
 
 pub trait RowIdOr<T> {
-    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s T>;
+    fn row_id_or(&self) -> either::Either<i64, &T>;
 }
 
 impl RowIdOr<EntityName> for EntityName {
-    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s EntityName> {
+    fn row_id_or(&self) -> either::Either<i64, &EntityName> {
         either::Right(self)
     }
 }
 
 impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
-    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s AttributeName<'a>> {
+    fn row_id_or(&self) -> either::Either<i64, &AttributeName<'a>> {
         either::Right(self)
     }
 }
@@ -207,7 +210,7 @@ pub struct Entity {
 
 /// Not implemented for all T, because Entity and Attribute rowids are not the same!
 impl RowIdOr<EntityName> for Entity {
-    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s EntityName> {
+    fn row_id_or(&self) -> either::Either<i64, &EntityName> {
         either::Left(self.rowid)
     }
 }
@@ -710,7 +713,8 @@ where
 
     sql::attribute_map_sql(attrs, &mut q).unwrap();
 
-    eprintln!("[DEBUG] sql: {}", q.as_str());
+    eprintln!("[DEBUG] sql:");
+    eprintln!("{}", q.as_str());
     eprintln!("[DEBUG] par: {:?}", q.params());
 
     let mut stmt = sess.tx.prepare(q.as_str())?;

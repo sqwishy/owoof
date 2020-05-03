@@ -534,6 +534,28 @@ pub struct AttributeMap<'a, V> {
     pub limit: i64,
 }
 
+impl<'a, V> AttributeMap<'a, V> {
+    pub fn result_columns(
+        &'a self,
+    ) -> impl Iterator<Item = impl FnOnce(&mut crate::sql::Query) -> std::fmt::Result + 'a> + 'a
+    {
+        use crate::sql::{datomset_t, datomset_v, read_value, Query};
+        use std::fmt::Write;
+
+        self.map.iter().map(|(_, datomset)| {
+            let datomset = *datomset;
+            move |query: &mut Query| {
+                write!(
+                    query,
+                    "{t}, {v}",
+                    t = &datomset_t(datomset),
+                    v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
+                )
+            }
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct Selection<'a, V> {
     pub projection: &'a Projection<'a, V>,

@@ -289,14 +289,10 @@ where
 {
     let pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
 
-    for (pre, (_, datomset)) in pre.zip(attrs.map.iter().cloned()) {
-        write!(
-            query,
-            "{pre}{t}, {v}\n",
-            pre = pre,
-            t = &datomset_t(datomset),
-            v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
-        )?
+    for (pre, col_fn) in pre.zip(attrs.result_columns()) {
+        query.push_str(pre);
+        col_fn(query)?;
+        query.deref_mut().push('\n');
     }
 
     projection_sql(attrs.projection, query)?;

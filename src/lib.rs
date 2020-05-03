@@ -499,7 +499,7 @@ impl<'db> Session<'db> {
             &format!(
                 "CREATE TEMPORARY VIEW IF NOT EXISTS
                     attributes (rowid, ident)
-                 AS select e, v FROM datoms WHERE a = {} AND t = {}",
+                 AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
                 ATTR_IDENT_ROWID, T_ATTRIBUTE,
             ),
             rusqlite::NO_PARAMS,
@@ -807,7 +807,7 @@ mod tests {
             let authors = s.new_attribute(":book/authors")?;
 
             let mut r = csv::Reader::from_path("goodbooks-10k/books.csv")?;
-            for result in r.deserialize().take(4000) {
+            for result in r.deserialize().take(1_000) {
                 let book: Book = result?;
 
                 let e = s.new_entity()?;
@@ -826,7 +826,7 @@ mod tests {
             let user = s.new_attribute(":rating/user")?;
 
             let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(8000) {
+            for result in r.deserialize().take(1_000) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -876,30 +876,21 @@ mod tests {
 
         // eprintln!("all datoms: {:#?}", sess.all_datoms::<Value>());
 
-        let patterns = vec![
-            // pat!(?r "rating/book" ?b),
-            pat!(?b ":book/avg-rating" ?v),
-            // pat!(?b "book/title" ?t),
-        ];
+        let patterns = vec![pat!(?b ":book/avg-rating" ?v), pat!(?r ":rating/book" ?b)];
         let max_rating = 4.0.into();
 
         let mut p = Projection::<rusqlite::types::Value>::default();
         p.add_patterns(&patterns);
-        p.add_constraint(
-            p.variable("v")
-                .cloned()
-                .unwrap()
-                .le(matter::Concept::Value(&max_rating)),
-        );
 
-        // let book = p.variable("b").cloned().unwrap();
-        let attrs = vec![
-            // "entity/uuid".into(),
+        let var_v = p.variable("v").cloned().unwrap();
+        p.add_constraint(var_v.le(matter::Concept::Value(&max_rating)));
+
+        let book_attrs = vec![
             AttributeName::from_static(":book/title"),
             AttributeName::from_static(":book/isbn"),
             AttributeName::from_static(":book/avg-rating"),
         ];
-        let mut attrs = p.attribute_map("b", &attrs);
+        let mut attrs = p.attribute_map("b", &book_attrs);
         attrs.order_by.push(attrs.map[2].1.value_field().desc());
         attrs.limit = 12;
 

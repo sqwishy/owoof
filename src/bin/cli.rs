@@ -1,97 +1,8 @@
-//! Usage:
-//! cli '?b book/title "Starship Troopers"' \
-//!     '?r rating/book ?b' \
-//!     --show '?r rating/rank rating/user'
-//!
-//! ```
-//!     [ {"rating/rank": 5, "rating/user": 1234} ]
-//! ```
-//!
-//! ??? Not supported, maybe one day, but what's the syntax for controlling limits or orderings?
-//! cli '?b book/avg-rating ?v' \
-//!     '?r rating/book ?b' \
-//!     --if '?v < 4.0'
-//!     --show '?b book/title book/isbn ???
-//!
-//! ```
-//!     [
-//!       {
-//!         "book/title": "Starship Troopers",
-//!         "book/isbn": "441783589",
-//!         "book/ratings": [
-//!           {"rating/rank": 5, "rating/user": 1234}
-//!         ]
-//!       }
-//!     ]
-//! ```
-//!
-//! ?b (book/title book/isbn {book/ratings: (?r rating/book ?b)})
-//! {book/title,
-//!  book/isbn,
-//!  book/ratings: {
-//!     pull: (?r rating/book ?b)
-//!  },
-//!  }
-//!
-//! ?r (rating/book {book/ratings})
+//! hi
 
-// use std::borrow::Cow;
-// use std::convert::TryFrom;
-// use std::str::FromStr;
 use std::path::PathBuf;
 
-// #[repr(transparent)]
-// struct Entity<'a>(Cow<'a, str>);
-
-// #[derive(Debug, Eq, PartialEq)]
-// #[repr(transparent)]
-// struct Attribute<'a>(Cow<'a, str>);
-//
-// // impl<'a> Clone for Attribute<'a> {
-// //     fn clone(&self) -> Self {
-// //         Attribute(self.0.clone())
-// //     }
-// // }
-//
-// impl<'a> TryFrom<&'a str> for Attribute<'a> {
-//     type Error = ();
-//
-//     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-//         if !s.starts_with(":") {
-//             return Err(());
-//         }
-//         return Ok(Attribute(s.into()));
-//     }
-// }
-//
-// impl<'a> TryFrom<String> for Attribute<'a> {
-//     type Error = ();
-//
-//     fn try_from(s: String) -> Result<Self, Self::Error> {
-//         if !s.starts_with(":") {
-//             return Err(());
-//         }
-//         return Ok(Attribute(s.into()));
-//     }
-// }
-//
-// #[derive(Debug, Eq, PartialEq)]
-// #[repr(transparent)]
-// struct Variable<'a>(Cow<'a, str>);
-
-// #[test]
-// fn parse() {
-//     use std::convert::TryInto;
-//     assert_eq!(
-//         Ok(Attribute(":entity/uuid".into())),
-//         ":entity/uuid".try_into(),
-//     );
-//
-//     assert_eq!(
-//         Ok(Attribute(":entity/uuid".into())),
-//         ":entity/uuid".to_string().try_into(),
-//     );
-// }
+use anyhow::Context;
 
 #[derive(Debug, thiserror::Error)]
 enum ArgError<'a> {
@@ -199,7 +110,7 @@ impl<'a> Command<'a> {
 
                 sel.limit = limit;
 
-                let results = sess.select(&sel)?;
+                let results = sess.select(&sel).context("select")?;
                 let jaysons = serde_json::to_string_pretty(&results)?;
                 println!("{}", jaysons);
 
@@ -232,7 +143,12 @@ fn main() {
         Ok(cmd) => {
             eprintln!("{:#?}", cmd);
             if let Err(e) = cmd.run() {
-                println!("error: {}", e);
+                print!("error");
+                for cause in e.chain() {
+                    print!(": {}", cause);
+                }
+                println!("");
+
                 std::process::exit(1);
             }
         }

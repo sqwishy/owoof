@@ -316,7 +316,9 @@ pub trait FromAffinityValue {
             .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
             .map_err(|e| rusqlite::types::FromSqlError::Other(e))?;
         let v_ref = c.get_raw();
-        let v = Self::from_affinity_value(affinity, v_ref)?;
+        let v = Self::from_affinity_value(affinity, v_ref)
+            .with_context(|| format!("reading value {:?} with affinity {:?}", v_ref, affinity))
+            .map_err(|e| rusqlite::types::FromSqlError::Other(e.into()))?;
         Ok(v)
     }
 }

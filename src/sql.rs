@@ -237,7 +237,7 @@ where
         query.push_str(pre.next().unwrap());
         let col_str = match l.field {
             Field::Entity => read_entity(&location(l)),
-            Field::Attribute => read_attribute(&location(l)),
+            Field::Attribute => todo!("read_entity() instead?"), //read_attribute(&location(l)),
             Field::Value => read_value(&datomset_t(l.datomset), &datomset_v(l.datomset)),
         };
         query.push_str(&col_str);
@@ -294,13 +294,10 @@ pub(crate) fn read_value(t_col: &str, v_col: &str) -> String {
     format!(
         "CASE {t}
          WHEN {t_ent} THEN {rd_ent}
-         WHEN {t_atr} THEN {rd_atr}
          ELSE {v} END",
         t = t_col,
         t_ent = crate::T_ENTITY,
         rd_ent = read_entity(v_col),
-        t_atr = crate::T_ATTRIBUTE,
-        rd_atr = read_attribute(v_col),
         v = v_col,
     )
 }

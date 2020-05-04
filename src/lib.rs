@@ -128,7 +128,7 @@ pub struct AttributeName<'a>(
 );
 
 impl<'a> AttributeName<'a> {
-    fn from_static(s: &'static str) -> Self {
+    pub fn from_static(s: &'static str) -> Self {
         AttributeName::try_from(Cow::from(s)).unwrap()
     }
 }
@@ -662,7 +662,7 @@ impl<'db> Session<'db> {
     }
 
     /// for debugging ... use with T as rusqlite::types::Value
-    fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<T>>>
+    pub fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<T>>>
     where
         T: FromAffinityValue,
     {
@@ -677,62 +677,54 @@ impl<'db> Session<'db> {
         rows.collect::<_>()
     }
 
-    fn select(&self, s: &Selection<rusqlite::types::Value>) -> rusqlite::Result<Vec<Vec<Value>>> {
+    pub fn select<'s, V>(
+        &self,
+        s: &'s Selection<'s, V>,
+    ) -> rusqlite::Result<Vec<Vec<HashMap<&'s AttributeName<'s>, V>>>>
+    where
+        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+    {
         let mut q = sql::Query::default();
-        let _ = sql::selection_sql(&s, &mut q);
+        let _ = sql::selection_sql(s, &mut q);
+
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", q.as_str());
+        eprintln!("[DEBUG] par: {:?}", q.params());
 
         let mut stmt = self.tx.prepare(q.as_str())?;
 
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
-            s.columns()
+
+            s.attrs
                 .iter()
-                .map(|loc| -> rusqlite::Result<Value> {
-                    use matter::Field;
-                    Ok(match loc.field {
-                        Field::Entity => Value::Entity(EntityName(c.get()?)),
-                        Field::Attribute => Value::Attribute(c.get()?),
-                        Field::Value => Value::read_affinity_value(&mut c)?,
-                    })
+                .map(|a| {
+                    a.map
+                        .iter()
+                        .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
+                            let value = V::read_affinity_value(&mut c)?;
+                            Ok((*attr, value))
+                        })
+                        .collect::<rusqlite::Result<HashMap<_, _>>>()
                 })
-                .collect::<rusqlite::Result<Vec<Value>>>()
+                .collect::<rusqlite::Result<Vec<_>>>()
+
+            // TODO UUHSDFUSDHFJ
+            // s.columns()
+            //     .iter()
+            //     .map(|loc| -> rusqlite::Result<Value> {
+            //         use matter::Field;
+            //         Ok(match loc.field {
+            //             Field::Entity => Value::Entity(EntityName(c.get()?)),
+            //             Field::Attribute => Value::Attribute(c.get()?),
+            //             Field::Value => Value::read_affinity_value(&mut c)?,
+            //         })
+            //     })
+            //     .collect::<rusqlite::Result<Vec<Value>>>()
         })?;
 
         rows.collect()
     }
-}
-
-pub fn query_attribute_map<'db, 'a, V>(
-    attrs: &matter::AttributeMap<'a, V>,
-    sess: &mut Session<'db>,
-) -> rusqlite::Result<Vec<HashMap<&'a AttributeName<'a>, V>>>
-where
-    V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
-{
-    let mut q = sql::Query::default();
-
-    sql::attribute_map_sql(attrs, &mut q).unwrap();
-
-    eprintln!("[DEBUG] sql:");
-    eprintln!("{}", q.as_str());
-    eprintln!("[DEBUG] par: {:?}", q.params());
-
-    let mut stmt = sess.tx.prepare(q.as_str())?;
-
-    let rows = stmt.query_map(q.params(), |row| {
-        let mut c = sql::RowCursor::from(row);
-        attrs
-            .map
-            .iter()
-            .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-                let value = V::read_affinity_value(&mut c)?;
-                Ok((*attr, value))
-            })
-            .collect::<rusqlite::Result<HashMap<_, _>>>()
-    })?;
-
-    let wow = rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, _>>>>()?;
-    Ok(wow)
 }
 
 #[cfg(test)]
@@ -876,10 +868,14 @@ mod tests {
 
         // eprintln!("all datoms: {:#?}", sess.all_datoms::<Value>());
 
-        let patterns = vec![pat!(?b ":book/avg-rating" ?v), pat!(?r ":rating/book" ?b)];
-        let max_rating = 4.0.into();
+        let patterns = vec![
+            /* */
+            pat!(?b ":book/avg-rating" ?v),
+            pat!(?r ":rating/book" ?b),
+        ];
+        let max_rating = Value::Real(4.0);
 
-        let mut p = Projection::<rusqlite::types::Value>::default();
+        let mut p = Projection::<Value>::default();
         p.add_patterns(&patterns);
 
         let var_v = p.variable("v").cloned().unwrap();
@@ -890,31 +886,24 @@ mod tests {
             AttributeName::from_static(":book/isbn"),
             AttributeName::from_static(":book/avg-rating"),
         ];
-        let mut attrs = p.attribute_map("b", &book_attrs);
-        attrs.order_by.push(attrs.map[2].1.value_field().desc());
-        attrs.limit = 12;
+        // let book_map = p.attribute_map("b", &book_attrs);
+        let book_map = p.entity_group("b").unwrap().attribute_map(&book_attrs);
 
-        // eprintln!("{:#?}", attrs_map);
-        let mut q = sql::Query::default();
-        sql::attribute_map_sql(&attrs, &mut q).unwrap();
-        eprintln!("{}", q);
-        eprintln!("{:?}", q.params());
+        let rate_attrs = vec![
+            AttributeName::from_static(":rating/user"),
+            AttributeName::from_static(":rating/score"),
+        ];
+        let rate_map = p.entity_group("r").unwrap().attribute_map(&rate_attrs);
 
-        let mut stmt = sess.tx.prepare(q.as_str())?;
+        let mut sel = p.selection();
+        sel.attrs.push(&book_map);
+        sel.attrs.push(&rate_map);
+        // This is quite. Maybe it scans a temporary table instead of using an index?
+        // TODO investigate why
+        // sel.order_by.push(book_map.map[2].1.value_field().desc());
+        sel.limit = 8;
 
-        let rows = stmt.query_map(q.params(), |row| {
-            let mut c = sql::RowCursor::from(row);
-            attrs
-                .map
-                .iter()
-                .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-                    let value = Value::read_affinity_value(&mut c)?;
-                    Ok((*attr, value))
-                })
-                .collect::<rusqlite::Result<HashMap<_, _>>>()
-        })?;
-
-        let wow = rows.collect::<rusqlite::Result<Vec<HashMap<&AttributeName, Value>>>>()?;
+        let wow = sess.select(&sel)?;
 
         let jaysons = serde_json::to_string_pretty(&wow)?;
         println!("{}", jaysons);

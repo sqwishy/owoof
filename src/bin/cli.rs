@@ -119,9 +119,9 @@ enum Command<'a> {
     },
     Query {
         path: PathBuf,
-        map: (&'a str, Vec<oof::AttributeName<'a>>),
+        maps: Vec<(&'a str, Vec<oof::AttributeName<'a>>)>,
         patterns: Vec<oof::Pattern<'a, oof::Value>>,
-        order: Vec<(oof::AttributeName<'a>, oof::Ordering)>,
+        order: Vec<(&'a str, Vec<oof::AttributeName<'a>>, oof::Ordering)>,
         limit: i64,
     },
 }
@@ -166,7 +166,7 @@ impl<'a> Command<'a> {
             }
             Command::Query {
                 path,
-                map: (map_var, map_attrs),
+                maps,
                 patterns,
                 order,
                 limit,
@@ -176,32 +176,30 @@ impl<'a> Command<'a> {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
                 )?;
-                let mut sess = oof::Session::new(&mut conn)?;
 
-                // todo this is a ridiculous step
-                let map_attrs: Vec<_> = map_attrs
-                    .into_iter()
-                    .map(oof::AttributeName::from)
-                    .collect();
+                let sess = oof::Session::new(&mut conn)?;
 
                 let mut p = oof::Projection::from_patterns(&patterns);
+                let mut sel = p.selection();
 
-                let mut eg = p.entity_group(map_var).expect("todo deanonymize variable");
-
-                let order_by = order
+                let mappings = maps
                     .iter()
-                    .map(|(attr, ord)| {
-                        let location = eg.get_or_fetch_attribute(attr).value_field();
-                        (location, *ord)
+                    .map(|(var, attrs)| sel.attribute_map(var, attrs))
+                    .collect::<Vec<_>>();
+                sel.attrs.extend(mappings.iter());
+
+                sel.order_by = order
+                    .iter()
+                    .flat_map(|(var, attrs, ord)| {
+                        sel.attribute_map(var, attrs)
+                            .into_value_locations()
+                            .map(move |loc| (loc, *ord))
                     })
                     .collect();
 
-                let mut attrs = eg.attribute_map(&map_attrs);
-                attrs.limit = limit;
-                attrs.order_by = order_by;
+                sel.limit = limit;
 
-                let results = oof::query_attribute_map(&attrs, &mut sess)?;
-
+                let results = sess.select(&sel)?;
                 let jaysons = serde_json::to_string_pretty(&results)?;
                 println!("{}", jaysons);
 
@@ -222,7 +220,7 @@ fn main() {
         Err(e) => {
             eprintln!("{}\n", e);
             eprintln!(
-                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>] [--asc <attr>] [--desc <attr>]",
+                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>] [--asc <map>] [--desc <map>]",
                 prog
             );
             eprintln!("       {} [--db <path>] assert", prog);
@@ -257,7 +255,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
     let mut patterns = vec![];
     let mut order = vec![];
     let mut db = Option::<&str>::None;
-    let mut map = Option::<&str>::None;
+    let mut maps = vec![];
     let mut limit = Option::<&str>::None;
 
     let parse_db_path = |db: Option<&str>| -> Result<PathBuf, _> {
@@ -283,18 +281,19 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
                 db = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
             }
             "--map" => {
-                map = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
+                let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                maps.push(v);
             }
             "--limit" => {
                 limit = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
             }
             "--asc" => {
-                let attr = args.next().ok_or(ArgError::NeedsValue(arg))?;
-                order.push((attr, oof::Ordering::Asc));
+                let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((v, oof::Ordering::Asc));
             }
             "--desc" => {
-                let attr = args.next().ok_or(ArgError::NeedsValue(arg))?;
-                order.push((attr, oof::Ordering::Desc));
+                let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((v, oof::Ordering::Desc));
             }
             _ if arg.starts_with("-") => return Err(ArgError::Unknown(arg)),
             _ => patterns.push(arg),
@@ -309,7 +308,14 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
         .collect::<anyhow::Result<Vec<_>>>()
         .map_err(ArgError::invalid("<pattern>"))?;
 
-    let map = parse_map(map.unwrap_or("?_ :entity/uuid")).map_err(ArgError::invalid("--map"))?;
+    let maps = if maps.is_empty() {
+        vec![("?_", vec![oof::AttributeName::from_static(":entity/uuid")])]
+    } else {
+        maps.into_iter()
+            .map(parse_map)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(ArgError::invalid("--map"))?
+    };
 
     let limit = limit
         .map(|s| {
@@ -321,9 +327,9 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
 
     let order = order
         .into_iter()
-        .map(|(attr, ord)| {
-            parse_attribute(attr)
-                .map(|attr| (attr, ord))
+        .map(|(ordering, ord)| {
+            parse_map(ordering)
+                .map(|(var, attrs)| (var, attrs, ord))
                 .map_err(ArgError::invalid(match ord {
                     oof::Ordering::Asc => "--asc",
                     oof::Ordering::Desc => "--desc",
@@ -333,7 +339,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
 
     return Ok(Command::Query {
         path,
-        map,
+        maps,
         limit,
         patterns,
         order,

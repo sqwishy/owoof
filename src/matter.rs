@@ -1,3 +1,4 @@
+use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, iter};
 
 use crate::{AttributeName, EntityName};
@@ -415,9 +416,19 @@ where
         self.constraints.push(c);
     }
 
-    pub fn entity_group<'b>(&'b mut self, var: &'a str) -> Option<EntityGroup<'b, 'a, V>>
+    pub fn selection(&'a mut self) -> Selection<'a, V> {
+        Selection {
+            projection: self,
+            columns: vec![],
+            attrs: vec![],
+            order_by: vec![],
+            limit: 0,
+        }
+    }
+
+    pub fn entity_group<'p>(&'p mut self, var: &'a str) -> Option<EntityGroup<'p, 'a, V>>
     where
-        'a: 'b,
+        'a: 'p,
     {
         if var == ANONYMOUS {
             return None;
@@ -436,13 +447,13 @@ where
         })
     }
 
-    pub fn attribute_map<I>(&'a mut self, top: &'a str, attrs: I) -> AttributeMap<'a, V>
+    pub fn attribute_map<'p, I>(&mut self, top: &'a str, attrs: I) -> AttributeMap<'p, V>
     where
+        'a: 'p,
         I: iter::IntoIterator<Item = &'a AttributeName<'a>>,
     {
-        self.entity_group(top)
-            .expect("todo deanonymize variable")
-            .attribute_map(attrs)
+        let mut eg = self.entity_group(top).expect("todo deanonymize variable");
+        eg.attribute_map(attrs)
     }
 }
 
@@ -489,9 +500,7 @@ where
         return datomset;
     }
 
-    // TODO I can't figure out how to do this without moving ...
-    // maybe there is no way? It's a little surprising.
-    pub fn attribute_map<'b: 'p, I>(mut self, attrs: I) -> AttributeMap<'a, V>
+    pub fn attribute_map<'b: 'p, I>(&mut self, attrs: I) -> AttributeMap<'p, V>
     where
         I: iter::IntoIterator<Item = &'b AttributeName<'b>>,
     {
@@ -499,12 +508,9 @@ where
             .into_iter()
             .map(|attr| (attr, self.get_or_fetch_attribute(attr)))
             .collect();
-
         AttributeMap {
             map,
-            projection: self.projection,
-            order_by: vec![],
-            limit: 0,
+            p: Default::default(),
         }
     }
 }
@@ -527,14 +533,18 @@ impl Location {
 
 #[derive(Debug)]
 pub struct AttributeMap<'a, V> {
-    pub projection: &'a Projection<'a, V>,
     /// This is ordered, corresponding to query row column order
     pub map: Vec<(&'a AttributeName<'a>, DatomSet)>,
-    pub order_by: Vec<(Location, Ordering)>,
-    pub limit: i64,
+    p: std::marker::PhantomData<V>,
 }
 
 impl<'a, V> AttributeMap<'a, V> {
+    pub fn into_value_locations(self) -> impl Iterator<Item = Location> + 'a {
+        self.map
+            .into_iter()
+            .map(|(_, datomset)| datomset.value_field())
+    }
+
     pub fn result_columns(
         &'a self,
     ) -> impl Iterator<Item = impl FnOnce(&mut crate::sql::Query) -> std::fmt::Result + 'a> + 'a
@@ -558,25 +568,35 @@ impl<'a, V> AttributeMap<'a, V> {
 
 #[derive(Debug)]
 pub struct Selection<'a, V> {
-    pub projection: &'a Projection<'a, V>,
+    pub projection: &'a mut Projection<'a, V>,
     pub columns: Vec<Location>,
+    /// todo, simplify this so we don't own/borrow attribute maps,
+    /// attribute maps just produce locations that go into `columns`
+    pub attrs: Vec<&'a AttributeMap<'a, V>>,
+    pub order_by: Vec<(Location, Ordering)>,
     pub limit: i64,
 }
 
 impl<'a, V> Selection<'a, V> {
-    pub fn new(projection: &'a Projection<'a, V>) -> Self {
-        Selection {
-            projection,
-            columns: vec![],
-            limit: 0,
-        }
-    }
-
     pub fn columns(&self) -> &Vec<Location> {
         &self.columns
     }
 
     pub fn limit(&self) -> i64 {
         self.limit
+    }
+}
+
+impl<'a, V> Deref for Selection<'a, V> {
+    type Target = Projection<'a, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.projection
+    }
+}
+
+impl<'a, V> DerefMut for Selection<'a, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.projection
     }
 }

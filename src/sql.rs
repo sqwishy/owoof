@@ -224,6 +224,7 @@ pub fn datomset_v(datomset: DatomSet) -> String {
 }
 
 pub fn selection_sql<'q, 'a: 'q, V>(
+    // TODO use different lifetimes for 'a?
     s: &'a matter::Selection<'a, V>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
@@ -231,6 +232,7 @@ where
     V: Debug + ToSql,
 {
     let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
+
     for l in s.columns() {
         query.push_str(pre.next().unwrap());
         let col_str = match l.field {
@@ -242,7 +244,15 @@ where
         query.push_str("\n");
     }
 
+    for (pre, col_fn) in pre.zip(s.attrs.iter().map(|a| a.result_columns()).flatten()) {
+        query.push_str(pre);
+        col_fn(query)?;
+        query.deref_mut().push('\n');
+    }
+
     projection_sql(s.projection, query)?;
+
+    order_by_sql(&s.order_by, query)?;
 
     limit_sql(&s.limit, query)?;
 
@@ -277,30 +287,6 @@ pub fn limit_sql<'a>(limit: &'a i64, query: &mut GenericQuery<&'a dyn ToSqlDebug
         query.push_str(" LIMIT ?\n");
         query.add_param(limit as &dyn ToSqlDebug);
     }
-    Ok(())
-}
-
-pub fn attribute_map_sql<'q, 'a: 'q, V>(
-    attrs: &'a matter::AttributeMap<'a, V>,
-    query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
-) -> fmt::Result
-where
-    V: Debug + ToSql,
-{
-    let pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
-
-    for (pre, col_fn) in pre.zip(attrs.result_columns()) {
-        query.push_str(pre);
-        col_fn(query)?;
-        query.deref_mut().push('\n');
-    }
-
-    projection_sql(attrs.projection, query)?;
-
-    order_by_sql(&attrs.order_by, query)?;
-
-    limit_sql(&attrs.limit, query)?;
-
     Ok(())
 }
 

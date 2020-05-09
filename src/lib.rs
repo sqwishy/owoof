@@ -513,14 +513,35 @@ pub struct Session<'db> {
 impl<'db> Session<'db> {
     pub fn new(db: &'db mut rusqlite::Connection) -> rusqlite::Result<Self> {
         let tx = db.transaction()?;
-        // This view will be attached to the lifetime of the connection, not the transaction ...
+
+        // Views are attached to the lifetime of the connection, not the transaction ...
         // ... so guard with IF NOT EXISTS.
+
         let tmp = format!(
             "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
                  AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
             ATTR_IDENT_ROWID, T_ATTRIBUTE,
         );
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", tmp);
         tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+
+        // ??? does this affect performance?
+        let tmp = format!(
+            "CREATE TEMPORARY VIEW IF NOT EXISTS uuid_datoms (e, a, t, v)
+                 AS SELECT uuid, {}, {}, rowid FROM entities",
+            ENTITY_UUID_ROWID, T_ENTITY,
+        );
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", tmp);
+        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+
+        let tmp = "CREATE TEMPORARY VIEW IF NOT EXISTS all_datoms (e, a, t, v)
+            AS SELECT * FROM uuid_datoms UNION SELECT * from datoms";
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", tmp);
+        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+
         Ok(Session { tx })
     }
 

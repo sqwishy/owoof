@@ -132,9 +132,9 @@ where
 
     for n in 0usize..projection.datomsets() {
         if n == 0 {
-            query.push_str("  FROM datoms ")
+            query.push_str("  FROM all_datoms ")
         } else {
-            query.push_str("     , datoms ")
+            query.push_str("     , all_datoms ")
         }
         // write the alias
         write!(query, "_dtm{}\n", n)?;

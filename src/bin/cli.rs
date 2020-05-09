@@ -58,22 +58,24 @@ impl<'a> Command<'a> {
                 let stuff: OwO<std::collections::HashMap<oof::AttributeName, oof::Value>> =
                     serde_json::from_reader(&mut stdin)?;
 
+                eprintln!("{:?}", stuff);
                 match stuff {
                     OwO::Many(stuff) => todo!("{:?}", stuff),
                     OwO::One(stuff) => {
-                        let ent = sess.assert_obj(&stuff)?;
-                        eprintln!("wow: {:?}", ent);
+                        let ent = sess.assert_obj(&stuff).context("assert object")?;
+                        let jaysons = serde_json::to_string_pretty(&ent.name)?;
+                        println!("{}", jaysons);
                     }
                 };
 
-                #[derive(serde::Deserialize)]
+                return sess.commit().context("commit transaction");
+
+                #[derive(serde::Deserialize, Debug)]
                 #[serde(untagged)]
                 enum OwO<T> {
                     Many(Vec<T>),
                     One(T),
                 }
-
-                Ok(())
             }
             Command::Query {
                 path,
@@ -82,6 +84,18 @@ impl<'a> Command<'a> {
                 order,
                 limit,
             } => {
+                // let mut memes = Vec::<u8>::with_capacity(512 * 1024 * 1024);
+                // let r = unsafe {
+                //     eprintln!("{:?} {}", memes.as_mut_ptr(), memes.capacity());
+                //     rusqlite::ffi::sqlite3_config(
+                //         rusqlite::ffi::SQLITE_CONFIG_HEAP,
+                //         memes.as_mut_ptr(),
+                //         memes.capacity(),
+                //         64,
+                //     )
+                // };
+                // todo!("{}", r);
+
                 let mut conn = rusqlite::Connection::open_with_flags(
                     &path,
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -89,6 +103,8 @@ impl<'a> Command<'a> {
                 )?;
 
                 let sess = oof::Session::new(&mut conn)?;
+
+                let start = std::time::Instant::now();
 
                 let mut p = oof::Projection::from_patterns(&patterns);
                 let mut sel = p.selection();
@@ -112,7 +128,10 @@ impl<'a> Command<'a> {
 
                 let results = sess.select(&sel).context("select")?;
                 let jaysons = serde_json::to_string_pretty(&results)?;
+                let end = std::time::Instant::now();
                 println!("{}", jaysons);
+
+                eprintln!("[DEBUG] duration: {:?}", end - start);
 
                 Ok(())
             }
@@ -141,7 +160,7 @@ fn main() {
             std::process::exit(1);
         }
         Ok(cmd) => {
-            eprintln!("{:#?}", cmd);
+            /* eprintln!("{:#?}", cmd); */
             if let Err(e) = cmd.run() {
                 print!("error");
                 for cause in e.chain() {

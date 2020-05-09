@@ -95,7 +95,7 @@ pub(crate) const T_ATTRIBUTE: i64 = -2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
-pub struct EntityName(#[serde(deserialize_with = "deserialize_with_entity_prefix")] uuid::Uuid);
+pub struct EntityName(#[serde(with = "crate::_serde::entity")] uuid::Uuid);
 
 impl Deref for EntityName {
     type Target = uuid::Uuid;
@@ -255,7 +255,7 @@ impl Affinity {
     fn t_and_bind(&self) -> (i64, &'static str) {
         match self {
             Affinity::Entity => (T_ENTITY, sql::bind_entity()),
-            Affinity::Attribute => (T_ATTRIBUTE, sql::bind_attribute()),
+            Affinity::Attribute => (T_ATTRIBUTE, "?"),
             Affinity::Other(t) => (*t, "?"),
         }
     }
@@ -367,7 +367,9 @@ impl FromAffinityValue for Value {
         use rusqlite::types::FromSql;
         Ok(match t {
             Affinity::Entity => Value::Entity(EntityName(uuid::Uuid::column_result(v)?)),
-            Affinity::Attribute => Value::Attribute(String::column_result(v)?),
+            Affinity::Attribute => {
+                Value::Attribute(AttributeName::column_result(v)?.0.into_owned())
+            }
             Affinity::Other(_) => Value::from(rusqlite::types::Value::column_result(v)?),
         })
     }
@@ -389,7 +391,11 @@ impl rusqlite::ToSql for Value {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
         match self {
             Value::Entity(v) => v.to_sql(),
-            Value::Attribute(v) => v.to_sql(),
+            Value::Attribute(v) => {
+                let (colon, name) = v.split_at(1);
+                assert_eq!(colon, ":");
+                name.to_sql()
+            }
             Value::Null => rusqlite::types::Null.to_sql(),
             Value::Integer(v) => v.to_sql(),
             Value::Real(v) => v.to_sql(),
@@ -399,22 +405,36 @@ impl rusqlite::ToSql for Value {
     }
 }
 
-impl Value {}
+pub mod _serde {
+    pub mod entity {
+        pub fn serialize<S>(e: &uuid::Uuid, ser: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            // nasty ......
+            let buf = &mut [0; 37];
+            buf[0] = 0x23; // #
+            e.to_hyphenated_ref().encode_lower(&mut buf[1..]);
+            let s = std::str::from_utf8(buf).unwrap();
+            ser.serialize_str(s)
+        }
 
-pub fn deserialize_with_entity_prefix<'de, D>(deserializer: D) -> Result<uuid::Uuid, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let s = String::deserialize(deserializer)?;
-    if !s.starts_with('#') {
-        return Err(serde::de::Error::custom(format!(
-            "expected '#' found {}",
-            s.get(0..1).unwrap_or("nothing")
-        )));
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<uuid::Uuid, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            use serde::Deserialize;
+            let s = String::deserialize(deserializer)?;
+            if !s.starts_with('#') {
+                return Err(serde::de::Error::custom(format!(
+                    "expected '#' found {}",
+                    s.get(0..1).unwrap_or("nothing")
+                )));
+            }
+            let (_, uuid) = s.split_at(1);
+            return uuid.parse().map_err(serde::de::Error::custom);
+        }
     }
-    let (_, uuid) = s.split_at(1);
-    return uuid.parse().map_err(serde::de::Error::custom);
 }
 
 pub fn deserialize_with_attribute_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -441,13 +461,11 @@ where
     deserialize_with_attribute_prefix(deserializer).map(Cow::from)
 }
 
-// pub trait SqlValue: rusqlite::types::FromSql + rusqlite::types::ToSql {}
-
-// impl<T> SqlValue for T where T: rusqlite::types::FromSql + rusqlite::types::ToSql {}
-
 /// An entity-attribute-value tuple thing.
 ///
 /// attribute is parameterized as to use a owned or borrowed string TODO this is stupid
+///
+/// TODO this type is only used for all_datoms() should probably just fuck off
 #[derive(Debug)]
 pub struct Datom<'a, T> {
     pub entity: EntityName,
@@ -497,15 +515,12 @@ impl<'db> Session<'db> {
         let tx = db.transaction()?;
         // This view will be attached to the lifetime of the connection, not the transaction ...
         // ... so guard with IF NOT EXISTS.
-        tx.execute(
-            &format!(
-                "CREATE TEMPORARY VIEW IF NOT EXISTS
-                    attributes (rowid, ident)
+        let tmp = format!(
+            "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
                  AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
-                ATTR_IDENT_ROWID, T_ATTRIBUTE,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
+            ATTR_IDENT_ROWID, T_ATTRIBUTE,
+        );
+        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
         Ok(Session { tx })
     }
 
@@ -651,6 +666,15 @@ impl<'db> Session<'db> {
             a = a_bind_str,
             v = v_bind_str,
         );
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", sql);
+        eprintln!(
+            "[DEBUG] par: {:?} {:?} {:?} {:?}",
+            e.to_sql(),
+            a.to_sql(),
+            t,
+            v
+        );
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
@@ -679,6 +703,8 @@ impl<'db> Session<'db> {
         rows.collect::<_>()
     }
 
+    /// TODO use trait for return type so the user can avoid double-vectorings and write things
+    /// that can read from column?
     pub fn select<'s, V>(
         &self,
         s: &'s Selection<'s, V>,
@@ -777,7 +803,13 @@ mod tests {
         assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);
 
         let v = ValueRef::Text("foo/bar".as_bytes());
-        assert_eq!(attr, AttributeName::column_result(v)?);
+        assert_eq!(AttributeName::column_result(v)?, attr);
+
+        let attr = Value::Attribute(":foo/bar".to_owned());
+        assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);
+
+        let v = ValueRef::Text("foo/bar".as_bytes());
+        assert_eq!(Value::from_affinity_value(Affinity::Attribute, v)?, attr);
 
         Ok(())
     }

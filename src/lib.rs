@@ -64,6 +64,7 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::needless_return)]
 
+mod explain;
 mod matter;
 mod sql;
 
@@ -79,6 +80,7 @@ use std::{
 
 use anyhow::Context;
 
+use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
 pub use matter::{Ordering, Pattern, Projection, Selection, VariableOr};
 
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
@@ -687,15 +689,15 @@ impl<'db> Session<'db> {
             a = a_bind_str,
             v = v_bind_str,
         );
-        eprintln!("[DEBUG] sql: ...");
-        eprintln!("{}", sql);
-        eprintln!(
-            "[DEBUG] par: {:?} {:?} {:?} {:?}",
-            e.to_sql(),
-            a.to_sql(),
-            t,
-            v
-        );
+        // eprintln!("[DEBUG] sql: ...");
+        // eprintln!("{}", sql);
+        // eprintln!(
+        //     "[DEBUG] par: {:?} {:?} {:?} {:?}",
+        //     e.to_sql(),
+        //     a.to_sql(),
+        //     t,
+        //     v
+        // );
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = stmt.execute(&[
@@ -726,6 +728,8 @@ impl<'db> Session<'db> {
 
     /// TODO use trait for return type so the user can avoid double-vectorings and write things
     /// that can read from column?
+    ///
+    /// TODO rename to find?
     pub fn select<'s, V>(
         &self,
         s: &'s Selection<'s, V>,
@@ -773,6 +777,44 @@ impl<'db> Session<'db> {
         })?;
 
         rows.collect()
+    }
+
+    pub fn explain<'s, V>(&self, s: &'s Selection<'s, V>) -> rusqlite::Result<Explanation>
+    where
+        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+    {
+        let mut q = sql::Query::default();
+        let _ = sql::selection_sql(s, &mut q);
+
+        let sql = format!("EXPLAIN\n{}", q);
+        let mut stmt = self.tx.prepare(&sql)?;
+
+        let rows = stmt.query_map(q.params(), |row| {
+            let mut c = sql::RowCursor::from(row);
+            ExplainLine::from_row_cursor(&mut c)
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map(|lines| Explanation { lines })
+    }
+
+    pub fn explain_plan<'s, V>(&self, s: &'s Selection<'s, V>) -> rusqlite::Result<PlanExplanation>
+    where
+        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+    {
+        let mut q = sql::Query::default();
+        let _ = sql::selection_sql(s, &mut q);
+
+        let sql = format!("EXPLAIN QUERY PLAN\n{}", q);
+        let mut stmt = self.tx.prepare(&sql)?;
+
+        let rows = stmt.query_map(q.params(), |row| {
+            let mut c = sql::RowCursor::from(row);
+            PlanExplainLine::from_row_cursor(&mut c)
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map(|lines| PlanExplanation { lines })
     }
 }
 
@@ -907,6 +949,36 @@ mod tests {
             book_id: i64,
             rating: i64,
         }
+    }
+
+    #[test]
+    fn explain() -> Result<()> {
+        let mut db = goodbooks()?;
+        let sess = Session::new(&mut db)?;
+
+        let mut p = Projection::<Value>::default();
+        let book_attrs = &[AttributeName::from_static(":book/title")];
+        let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
+        let mut sel = p.selection();
+        sel.attrs.push(&book);
+        println!("{}", sess.explain(&sel)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn explain_plan() -> Result<()> {
+        let mut db = goodbooks()?;
+        let sess = Session::new(&mut db)?;
+
+        let mut p = Projection::<Value>::default();
+        let book_attrs = &[AttributeName::from_static(":book/title")];
+        let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
+        let mut sel = p.selection();
+        sel.attrs.push(&book);
+        println!("{}", sess.explain_plan(&sel)?);
+
+        Ok(())
     }
 
     #[test]

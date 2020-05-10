@@ -132,9 +132,9 @@ where
 
     for n in 0usize..projection.datomsets() {
         if n == 0 {
-            query.push_str("  FROM all_datoms ")
+            query.push_str("  FROM datoms ")
         } else {
-            query.push_str("     , all_datoms ")
+            query.push_str("     , datoms ")
         }
         // write the alias
         write!(query, "_dtm{}\n", n)?;
@@ -334,6 +334,11 @@ impl<'a> RowCursor<'a> {
         let raw = self.row.get_raw(self.cursor);
         self.cursor += 1;
         raw
+    }
+
+    pub fn skip(&mut self, n: usize) -> &mut Self {
+        self.cursor += n;
+        self
     }
 }
 

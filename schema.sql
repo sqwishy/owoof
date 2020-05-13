@@ -29,8 +29,9 @@ create table "datoms"
     -- , tx    integer not null -- references "db/transactions" (id)
     );
 
--- TODO something here should be unique
-create index "datoms_eav" on "datoms" (e, a, t, v);
-create index "datoms_aev" on "datoms" (a, e, t, v);
--- datoms that are :db/unique or :db/index
-create index "datoms_ave_index"  on "datoms" (a, t, v, e);-- where "datoms"."is_indexed";
+-- thinkingface.jpg
+create unique index "datoms_ea"  on "datoms" (e, a);
+
+create        index "datoms_eav" on "datoms" (e, a, t, v);
+create        index "datoms_aev" on "datoms" (a, e, t, v);
+create        index "datoms_ave" on "datoms" (a, t, v, e);-- where "datoms"."is_indexed";

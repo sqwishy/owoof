@@ -1,6 +1,6 @@
 //! How is this organized?
 //!
-//! - lib.rs - Session & Datom
+//! - lib.rs - Session
 //! - matter.rs - Projection? Borrows patterns into datom sets & constraints
 //!             - 3-tuple of variable or entity, variable or attribute, variable or value
 //! - sql.rs - render a SQL query for a Projection
@@ -94,6 +94,22 @@ pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
 pub(crate) const T_ENTITY: i64 = -1;
 /// This is referenced _literally_ in the "attributes" database view.
 pub(crate) const T_ATTRIBUTE: i64 = -2;
+
+/// https://sqlite.org/rescode.html#extrc
+const SQLITE_CONSTRAINT_TRIGGER: i32 = 1811;
+const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
+
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum Error {
+    #[error("value must be unique the entity")]
+    NotUniqueForEntity,
+    #[error("{0} is immutable")]
+    Immutable(&'static str),
+    #[error("sql error")]
+    Sql(#[from] rusqlite::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
@@ -263,6 +279,14 @@ impl Affinity {
     }
 }
 
+impl rusqlite::types::FromSql for Affinity {
+    fn column_result(v: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
+        Affinity::try_from(v.as_i64()?)
+            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
+            .map_err(|e| rusqlite::types::FromSqlError::Other(e))
+    }
+}
+
 impl TryFrom<i64> for Affinity {
     type Error = i64;
 
@@ -314,9 +338,7 @@ pub trait FromAffinityValue {
     where
         Self: Sized,
     {
-        let affinity = Affinity::try_from(c.get::<i64>()?)
-            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
-            .map_err(|e| rusqlite::types::FromSqlError::Other(e))?;
+        let affinity = c.get::<Affinity>()?;
         let v_ref = c.get_raw();
         let v = Self::from_affinity_value(affinity, v_ref)
             .with_context(|| format!("reading value {:?} with affinity {:?}", v_ref, affinity))
@@ -463,50 +485,6 @@ where
     deserialize_with_attribute_prefix(deserializer).map(Cow::from)
 }
 
-/// An entity-attribute-value tuple thing.
-///
-/// attribute is parameterized as to use a owned or borrowed string TODO this is stupid
-///
-/// TODO this type is only used for all_datoms() should probably just fuck off
-#[derive(Debug)]
-pub struct Datom<'a, T> {
-    pub entity: EntityName,
-    pub attribute: AttributeName<'a>, //&'s str,
-    pub value: T,
-}
-
-impl<'a, T> Datom<'a, T> {
-    pub fn from_eav(entity: EntityName, attribute: AttributeName<'a>, value: T) -> Self {
-        Self {
-            entity,
-            attribute,
-            value,
-        }
-    }
-
-    pub fn eav(self) -> (EntityName, AttributeName<'a>, T) {
-        (self.entity, self.attribute, self.value)
-    }
-
-    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self>
-    where
-        T: FromAffinityValue,
-    {
-        Self::from_columns(&mut sql::RowCursor::from(row))
-    }
-
-    /// Expects a columns in the form of `e a is_ref v`
-    pub fn from_columns<'c>(c: &mut sql::RowCursor<'c>) -> rusqlite::Result<Self>
-    where
-        T: FromAffinityValue,
-    {
-        let e = EntityName(c.get()?);
-        let a = AttributeName(c.get::<String>()?.into());
-        let v = T::read_affinity_value(c)?;
-        Ok(Datom::from_eav(e, a, v))
-    }
-}
-
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
 pub struct Session<'db> {
     tx: rusqlite::Transaction<'db>,
@@ -519,30 +497,57 @@ impl<'db> Session<'db> {
         // Views are attached to the lifetime of the connection, not the transaction ...
         // ... so guard with IF NOT EXISTS.
 
-        let tmp = format!(
+        let attributes = format!(
             "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
                  AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
             ATTR_IDENT_ROWID, T_ATTRIBUTE,
         );
-        eprintln!("[DEBUG] sql: ...");
-        eprintln!("{}", tmp);
-        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+        // eprintln!("[DEBUG] sql: ...");
+        // eprintln!("{}", attributes);
+        tx.execute(&attributes, rusqlite::NO_PARAMS)?;
 
-        // ??? does this affect performance?
-        let tmp = format!(
-            "CREATE TEMPORARY VIEW IF NOT EXISTS uuid_datoms (e, a, t, v)
-                 AS SELECT uuid, {}, {}, rowid FROM entities",
-            ENTITY_UUID_ROWID, T_ENTITY,
-        );
-        eprintln!("[DEBUG] sql: ...");
-        eprintln!("{}", tmp);
-        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+        tx.execute(
+            &format!(
+                "CREATE TRIGGER
+                  IF NOT EXISTS create_entity_uuid_datoms
+                AFTER INSERT ON entities
+                   FOR EACH ROW
+                BEGIN
+                    INSERT INTO datoms (e, a, t, v) VALUES (new.rowid, {}, {}, new.rowid);
+                END",
+                ENTITY_UUID_ROWID, T_ENTITY
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
 
-        let tmp = "CREATE TEMPORARY VIEW IF NOT EXISTS all_datoms (e, a, t, v)
-            AS SELECT * FROM uuid_datoms UNION SELECT * from datoms";
-        eprintln!("[DEBUG] sql: ...");
-        eprintln!("{}", tmp);
-        tx.execute(&tmp, rusqlite::NO_PARAMS)?;
+        tx.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
+                  IF NOT EXISTS accurate_entity_uuid_datoms
+                BEFORE INSERT ON datoms
+                    FOR EACH ROW WHEN new.a = {entity_uuid}
+                                  AND new.t = {t_entity}
+                                  AND new.e != new.v
+                BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
+                END",
+                entity_uuid = ENTITY_UUID_ROWID,
+                t_entity = T_ENTITY,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+
+        tx.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
+                  IF NOT EXISTS immutable_entity_uuid_datoms
+                BEFORE UPDATE ON entities
+                    FOR EACH ROW WHEN a = {entity_uuid}
+                BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
+                END",
+                entity_uuid = ENTITY_UUID_ROWID,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
 
         Ok(Session { tx })
     }
@@ -639,7 +644,7 @@ impl<'db> Session<'db> {
     }
 
     // todo implement for generic Assertable ToSql thing?
-    pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> rusqlite::Result<Entity> {
+    pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<Entity> {
         let entity_uuid = AttributeName::from_static(":entity/uuid");
 
         // application-level upsert so that we can get the rowid if the entity exists
@@ -662,7 +667,7 @@ impl<'db> Session<'db> {
         Ok(entity)
     }
 
-    pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> rusqlite::Result<()>
+    pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
         E: RowIdOr<EntityName>,
         A: RowIdOr<AttributeName<'z>>,
@@ -683,38 +688,61 @@ impl<'db> Session<'db> {
         let (t, v_bind_str) = v.affinity().t_and_bind();
 
         let sql = format!(
-            r#"INSERT INTO datoms (e, a, t, v)
-                    VALUES ( {e}, {a}, ?, {v} )"#,
+            r#"
+        INSERT INTO datoms (e, a, t, v)
+             VALUES ( {e}
+                    , {a}
+                    , ?
+                    , {v} )"#,
             e = e_bind_str,
             a = a_bind_str,
             v = v_bind_str,
         );
-        // eprintln!("[DEBUG] sql: ...");
-        // eprintln!("{}", sql);
-        // eprintln!(
-        //     "[DEBUG] par: {:?} {:?} {:?} {:?}",
-        //     e.to_sql(),
-        //     a.to_sql(),
-        //     t,
-        //     v
-        // );
+        eprintln!("[DEBUG] sql: ...");
+        eprintln!("{}", sql);
+        eprintln!(
+            "[DEBUG] par: {:?} {:?} {:?} {:?}",
+            e.to_sql(),
+            a.to_sql(),
+            t,
+            v
+        );
 
         let mut stmt = self.tx.prepare(&sql)?;
-        let n = stmt.execute(&[
+        let n = match stmt.execute(&[
             e as &dyn rusqlite::ToSql,
             a as &dyn rusqlite::ToSql,
             &t as &dyn rusqlite::ToSql,
             v,
-        ])?;
+        ]) {
+            Ok(n) => Ok(n),
+            Err(e) => match &e {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                        extended_code,
+                    },
+                    Some(msg),
+                ) => match (extended_code, msg.as_str()) {
+                    (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
+                        Err(Error::Immutable(":entity/id"))
+                    }
+                    (&SQLITE_CONSTRAINT_UNIQUE, msg) if msg.starts_with("UNIQUE") => {
+                        Err(Error::NotUniqueForEntity)
+                    }
+                    _ => Err(e.into()),
+                },
+                _ => Err(e.into()),
+            },
+        }?;
         assert_eq!(n, 1);
         Ok(())
     }
 
     /// for debugging ... use with T as rusqlite::types::Value
-    pub fn all_datoms<T>(&self) -> rusqlite::Result<Vec<Datom<T>>>
-    where
-        T: FromAffinityValue,
-    {
+    pub fn all_datoms(
+        &self,
+    ) -> rusqlite::Result<Vec<(EntityName, String, Affinity, rusqlite::types::Value)>> {
         // TODO this ignores the t value
         let sql = r#"
             SELECT entities.uuid, attributes.ident, t, v
@@ -722,7 +750,14 @@ impl<'db> Session<'db> {
               JOIN entities   ON datoms.e = entities.rowid
               JOIN attributes ON datoms.a = attributes.rowid"#;
         let mut stmt = self.tx.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::NO_PARAMS, Datom::from_row)?;
+        let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
+            Ok((
+                EntityName(row.get(0)?),
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })?;
         rows.collect::<_>()
     }
 
@@ -877,14 +912,14 @@ mod tests {
         Ok(())
     }
 
-    pub(crate) fn test_conn() -> Result<rusqlite::Connection> {
+    pub(crate) fn new_db() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
         Session::init_schema(&mut conn)?;
         Ok(conn)
     }
 
     pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
-        let mut db = test_conn()?;
+        let mut db = new_db()?;
         let s = Session::new(&mut db)?;
 
         let mut books = HashMap::<i64, EntityName>::new();
@@ -978,6 +1013,25 @@ mod tests {
         sel.attrs.push(&book);
         println!("{}", sess.explain_plan(&sel)?);
 
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_maybe_i_guess() -> Result<()> {
+        let mut db = new_db()?;
+
+        let session = Session::new(&mut db)?;
+        let name = session.new_attribute(":person/name")?;
+        let bob = session.new_entity()?;
+        session.assert(&bob, &name, &Value::Text("bob".to_owned()))?;
+
+        let res = session.assert(&bob, &name, &Value::Text("jim".to_owned()));
+        assert_eq!(res, Err(Error::NotUniqueForEntity));
+
+        // let d = session.all_datoms()?;
+        // eprintln!("{:#?}", d);
+
+        session.commit()?;
         Ok(())
     }
 

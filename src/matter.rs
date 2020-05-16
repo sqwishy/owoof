@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, iter};
 
-use crate::{AttributeName, EntityName};
+use crate::{AttributeName, EntityId};
 
 const ANONYMOUS: &str = "";
 
@@ -102,7 +102,7 @@ pub enum VariableOr<S, T> {
 /// (var|entity, var|attribute, var|value)
 #[derive(Debug)]
 pub struct Pattern<'a, V> {
-    pub entity: VariableOr<Cow<'a, str>, EntityName>,
+    pub entity: VariableOr<Cow<'a, str>, EntityId>,
     pub attribute: VariableOr<Cow<'a, str>, AttributeName<'a>>,
     pub value: VariableOr<Cow<'a, str>, V>,
 }
@@ -206,7 +206,7 @@ pub struct Constraint<'a, V> {
 #[derive(Debug)]
 pub enum Concept<'a, V> {
     Location(Location),
-    Entity(&'a EntityName),
+    Entity(&'a EntityId),
     Attribute(&'a AttributeName<'a>),
     Value(&'a V),
 }
@@ -249,8 +249,8 @@ impl<'a, V> From<Location> for Concept<'a, V> {
     }
 }
 
-impl<'a, V> From<&'a EntityName> for Concept<'a, V> {
-    fn from(o: &'a EntityName) -> Concept<'a, V> {
+impl<'a, V> From<&'a EntityId> for Concept<'a, V> {
+    fn from(o: &'a EntityId) -> Concept<'a, V> {
         Concept::Entity(o)
     }
 }

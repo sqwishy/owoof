@@ -10,9 +10,9 @@ use crate::{sql, T_ATTRIBUTE, T_ENTITY};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
-pub struct EntityName(#[serde(with = "crate::types::_serde::entity")] uuid::Uuid);
+pub struct EntityId(#[serde(with = "crate::types::_serde::entity")] uuid::Uuid);
 
-impl Deref for EntityName {
+impl Deref for EntityId {
     type Target = uuid::Uuid;
 
     fn deref(&self) -> &Self::Target {
@@ -20,16 +20,16 @@ impl Deref for EntityName {
     }
 }
 
-impl<I> From<I> for EntityName
+impl<I> From<I> for EntityId
 where
     I: Into<uuid::Uuid>,
 {
     fn from(i: I) -> Self {
-        EntityName(i.into())
+        EntityId(i.into())
     }
 }
 
-impl rusqlite::ToSql for EntityName {
+impl rusqlite::ToSql for EntityId {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
         self.0.to_sql()
     }
@@ -111,8 +111,8 @@ pub trait RowIdOr<T> {
     fn row_id_or(&self) -> either::Either<i64, &T>;
 }
 
-impl RowIdOr<EntityName> for EntityName {
-    fn row_id_or(&self) -> either::Either<i64, &EntityName> {
+impl RowIdOr<EntityId> for EntityId {
+    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
         either::Right(self)
     }
 }
@@ -126,21 +126,21 @@ impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Entity {
     pub(crate) rowid: i64,
-    pub name: EntityName,
+    pub id: EntityId,
 }
 
 /// Not implemented for all T, because Entity and Attribute rowids are not the same!
-impl RowIdOr<EntityName> for Entity {
-    fn row_id_or(&self) -> either::Either<i64, &EntityName> {
+impl RowIdOr<EntityId> for Entity {
+    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
         either::Left(self.rowid)
     }
 }
 
 impl Deref for Entity {
-    type Target = EntityName; //uuid::Uuid;
+    type Target = EntityId; //uuid::Uuid;
 
     fn deref(&self) -> &Self::Target {
-        &self.name
+        &self.id
     }
 }
 
@@ -208,7 +208,7 @@ pub trait Assertable {
     fn affinity(&self) -> Affinity;
 }
 
-impl Assertable for EntityName {
+impl Assertable for EntityId {
     fn affinity(&self) -> Affinity {
         Affinity::Entity
     }
@@ -264,7 +264,7 @@ pub trait FromAffinityValue {
 #[serde(untagged)]
 pub enum Value {
     /// Anything that looks like a uuid ends up in here
-    Entity(EntityName),
+    Entity(EntityId),
     #[serde(deserialize_with = "deserialize_with_attribute_prefix")]
     Attribute(String),
     Null,
@@ -277,7 +277,7 @@ pub enum Value {
 
 impl From<Entity> for Value {
     fn from(e: Entity) -> Self {
-        Value::Entity(e.name)
+        Value::Entity(e.id)
     }
 }
 
@@ -303,7 +303,7 @@ impl FromAffinityValue for Value {
     {
         use rusqlite::types::FromSql;
         Ok(match t {
-            Affinity::Entity => Value::Entity(EntityName(uuid::Uuid::column_result(v)?)),
+            Affinity::Entity => Value::Entity(EntityId(uuid::Uuid::column_result(v)?)),
             Affinity::Attribute => {
                 Value::Attribute(AttributeName::column_result(v)?.0.into_owned())
             }

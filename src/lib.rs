@@ -84,7 +84,7 @@ use anyhow::Context;
 use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
 pub use matter::{Ordering, Pattern, Projection, Selection, VariableOr};
 pub use types::{
-    Affinity, Assertable, Attribute, AttributeName, Entity, EntityName, FromAffinityValue, RowIdOr,
+    Affinity, Assertable, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, RowIdOr,
     Value,
 };
 
@@ -233,29 +233,29 @@ impl<'db> Session<'db> {
 
     pub fn new_entity(&self) -> rusqlite::Result<Entity> {
         let uuid = uuid::Uuid::new_v4();
-        self.new_entity_at(EntityName::from(uuid))
+        self.new_entity_at(EntityId::from(uuid))
     }
 
-    pub fn new_entity_at(&self, name: EntityName) -> rusqlite::Result<Entity> {
+    pub fn new_entity_at(&self, id: EntityId) -> rusqlite::Result<Entity> {
         let n = self.tx.execute(
             "INSERT INTO entities (uuid) VALUES (?)",
-            rusqlite::params![name],
+            rusqlite::params![id],
         )?;
         assert_eq!(n, 1);
         let rowid = self.tx.last_insert_rowid();
-        Ok(Entity { rowid, name })
+        Ok(Entity { rowid, id })
     }
 
-    pub fn find_entity(&self, name: EntityName) -> rusqlite::Result<Option<Entity>> {
+    pub(crate) fn find_entity(&self, id: EntityId) -> rusqlite::Result<Option<Entity>> {
         use rusqlite::OptionalExtension;
         self.tx
             .query_row(
                 "SELECT rowid FROM entities WHERE uuid = ?",
-                rusqlite::params![name],
+                rusqlite::params![id],
                 |row| row.get(0),
             )
             .optional()?
-            .map(|rowid| Ok(Entity { rowid, name }))
+            .map(|rowid| Ok(Entity { rowid, id }))
             .transpose()
     }
 
@@ -302,7 +302,7 @@ impl<'db> Session<'db> {
 
     pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
-        E: RowIdOr<EntityName>,
+        E: RowIdOr<EntityId>,
         A: RowIdOr<AttributeName<'z>>,
         T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
@@ -376,7 +376,7 @@ impl<'db> Session<'db> {
     /// - Should we find the datoms and then delete them by rowid?
     pub fn retract<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
-        E: RowIdOr<EntityName>,
+        E: RowIdOr<EntityId>,
         A: RowIdOr<AttributeName<'z>>,
         T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
@@ -439,7 +439,7 @@ impl<'db> Session<'db> {
     /// for debugging ... use with T as rusqlite::types::Value
     pub fn all_datoms(
         &self,
-    ) -> rusqlite::Result<Vec<(EntityName, String, Affinity, rusqlite::types::Value)>> {
+    ) -> rusqlite::Result<Vec<(EntityId, String, Affinity, rusqlite::types::Value)>> {
         // TODO this ignores the t value
         let sql = r#"
             SELECT entities.uuid, attributes.ident, t, v
@@ -487,7 +487,7 @@ impl<'db> Session<'db> {
             //     .map(|loc| -> rusqlite::Result<Value> {
             //         use matter::Field;
             //         Ok(match loc.field {
-            //             Field::Entity => Value::Entity(EntityName(c.get()?)),
+            //             Field::Entity => Value::Entity(EntityId(c.get()?)),
             //             Field::Attribute => Value::Attribute(c.get()?),
             //             Field::Value => Value::read_affinity_value(&mut c)?,
             //         })
@@ -559,7 +559,7 @@ mod tests {
             Value::Entity(
                 "03b48f17-7f0a-455f-af1d-ba946f762090"
                     .parse::<uuid::Uuid>()
-                    .map(EntityName::from)
+                    .map(EntityId::from)
                     .unwrap()
             )
         );
@@ -614,7 +614,7 @@ mod tests {
         let mut db = blank_db()?;
         let s = Session::new(&mut db)?;
 
-        let mut books = HashMap::<i64, EntityName>::new();
+        let mut books = HashMap::<i64, EntityId>::new();
 
         {
             let title = s.new_attribute(":book/title")?;
@@ -632,7 +632,7 @@ mod tests {
                 s.assert(&e, &isbn, &book.isbn)?;
                 s.assert(&e, &authors, &book.authors)?;
 
-                books.insert(book.book_id, e.name);
+                books.insert(book.book_id, e.id);
             }
         }
 
@@ -743,9 +743,7 @@ mod tests {
 
         assert_eq!(
             session.find(&sel)?,
-            // TODO for the love of god please stop calling attribute idents and entity ids names
-            // ... please fuck
-            vec![(Value::Entity(bob.name), bobs_name.clone())],
+            vec![(Value::Entity(bob.id), bobs_name.clone())],
         );
 
         session.retract(&bob, &name, &bobs_name)?;

@@ -416,11 +416,10 @@ where
         self.constraints.push(c);
     }
 
-    pub fn selection(&'a mut self) -> Selection<'a, V> {
+    pub fn select<S>(&'a mut self, s: &'a S) -> Selection<'a, V, S> {
         Selection {
             projection: self,
-            columns: vec![],
-            attrs: vec![],
+            columns: s,
             order_by: vec![],
             limit: 0,
         }
@@ -544,50 +543,39 @@ impl<'a, V> AttributeMap<'a, V> {
             .into_iter()
             .map(|(_, datomset)| datomset.value_field())
     }
-
-    pub fn result_columns(
-        &'a self,
-    ) -> impl Iterator<Item = impl FnOnce(&mut crate::sql::Query) -> std::fmt::Result + 'a> + 'a
-    {
-        use crate::sql::{datomset_t, datomset_v, read_value, Query};
-        use std::fmt::Write;
-
-        self.map.iter().map(|(_, datomset)| {
-            let datomset = *datomset;
-            move |query: &mut Query| {
-                write!(
-                    query,
-                    "{t}, {v}",
-                    t = &datomset_t(datomset),
-                    v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
-                )
-            }
-        })
-    }
 }
 
 #[derive(Debug)]
-pub struct Selection<'a, V> {
+pub struct Selection<'a, V, S> {
     pub projection: &'a mut Projection<'a, V>,
-    pub columns: Vec<Location>,
-    /// todo, simplify this so we don't own/borrow attribute maps,
-    /// attribute maps just produce locations that go into `columns`
-    pub attrs: Vec<&'a AttributeMap<'a, V>>,
+    pub columns: &'a S,
     pub order_by: Vec<(Location, Ordering)>,
     pub limit: i64,
 }
 
-impl<'a, V> Selection<'a, V> {
-    pub fn columns(&self) -> &Vec<Location> {
-        &self.columns
+impl<'a, V, S> Selection<'a, V, S> {
+    // pub fn find(
+    //     &self,
+    //     session: &mut crate::Session,
+    // ) -> rusqlite::Result<Vec<Vec<HashMap<&'s AttributeName<'s>, V>>>>
+    // where
+    //     V: crate::FromAffinityValue + crate::Assertable + rusqlite::ToSql + fmt::Debug,
+    // {
+    //     session.find(self)
+    // }
+
+    pub fn limit(&mut self, limit: i64) -> &mut Self {
+        self.limit = limit;
+        self
     }
 
-    pub fn limit(&self) -> i64 {
-        self.limit
+    pub fn order_by(&mut self, ord: (Location, Ordering)) -> &mut Self {
+        self.order_by.push(ord);
+        self
     }
 }
 
-impl<'a, V> Deref for Selection<'a, V> {
+impl<'a, V, S> Deref for Selection<'a, V, S> {
     type Target = Projection<'a, V>;
 
     fn deref(&self) -> &Self::Target {
@@ -595,7 +583,7 @@ impl<'a, V> Deref for Selection<'a, V> {
     }
 }
 
-impl<'a, V> DerefMut for Selection<'a, V> {
+impl<'a, V, S> DerefMut for Selection<'a, V, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.projection
     }

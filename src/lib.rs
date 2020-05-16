@@ -370,6 +370,15 @@ impl<'db> Session<'db> {
         Ok(())
     }
 
+    pub fn retract<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
+    where
+        E: RowIdOr<EntityName>,
+        A: RowIdOr<AttributeName<'z>>,
+        T: Assertable + rusqlite::ToSql + fmt::Debug,
+    {
+        todo!()
+    }
+
     /// for debugging ... use with T as rusqlite::types::Value
     pub fn all_datoms(
         &self,
@@ -394,14 +403,13 @@ impl<'db> Session<'db> {
 
     /// TODO use trait for return type so the user can avoid double-vectorings and write things
     /// that can read from column?
-    ///
-    /// TODO rename to find?
-    pub fn select<'s, V>(
+    pub fn find<'s, V, S>(
         &self,
-        s: &'s Selection<'s, V>,
-    ) -> rusqlite::Result<Vec<Vec<HashMap<&'s AttributeName<'s>, V>>>>
+        s: &'s Selection<'s, V, S>,
+    ) -> rusqlite::Result<Vec<<S as sql::ReadFromRow>::Out>>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug> + sql::ReadFromRow,
     {
         let mut q = sql::Query::default();
         let _ = sql::selection_sql(s, &mut q);
@@ -415,18 +423,20 @@ impl<'db> Session<'db> {
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
 
-            s.attrs
-                .iter()
-                .map(|a| {
-                    a.map
-                        .iter()
-                        .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-                            let value = V::read_affinity_value(&mut c)?;
-                            Ok((*attr, value))
-                        })
-                        .collect::<rusqlite::Result<HashMap<_, _>>>()
-                })
-                .collect::<rusqlite::Result<Vec<_>>>()
+            s.columns.read_from_row(&mut c)
+
+            // s.attrs
+            //     .iter()
+            //     .map(|a| {
+            //         a.map
+            //             .iter()
+            //             .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
+            //                 let value = V::read_affinity_value(&mut c)?;
+            //                 Ok((*attr, value))
+            //             })
+            //             .collect::<rusqlite::Result<HashMap<_, _>>>()
+            //     })
+            //     .collect::<rusqlite::Result<Vec<_>>>()
 
             // TODO UUHSDFUSDHFJ
             // s.columns()
@@ -445,9 +455,10 @@ impl<'db> Session<'db> {
         rows.collect()
     }
 
-    pub fn explain<'s, V>(&self, s: &'s Selection<'s, V>) -> rusqlite::Result<Explanation>
+    pub fn explain<'s, V, S>(&self, s: &'s Selection<'s, V, S>) -> rusqlite::Result<Explanation>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
     {
         let mut q = sql::Query::default();
         let _ = sql::selection_sql(s, &mut q);
@@ -464,9 +475,13 @@ impl<'db> Session<'db> {
             .map(|lines| Explanation { lines })
     }
 
-    pub fn explain_plan<'s, V>(&self, s: &'s Selection<'s, V>) -> rusqlite::Result<PlanExplanation>
+    pub fn explain_plan<'s, V, S>(
+        &self,
+        s: &'s Selection<'s, V, S>,
+    ) -> rusqlite::Result<PlanExplanation>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
     {
         let mut q = sql::Query::default();
         let _ = sql::selection_sql(s, &mut q);
@@ -543,14 +558,14 @@ mod tests {
         Ok(())
     }
 
-    pub(crate) fn new_db() -> Result<rusqlite::Connection> {
+    pub(crate) fn blank_db() -> Result<rusqlite::Connection> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
         Session::init_schema(&mut conn)?;
         Ok(conn)
     }
 
     pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
-        let mut db = new_db()?;
+        let mut db = blank_db()?;
         let s = Session::new(&mut db)?;
 
         let mut books = HashMap::<i64, EntityName>::new();
@@ -625,8 +640,7 @@ mod tests {
         let mut p = Projection::<Value>::default();
         let book_attrs = &[AttributeName::from_static(":book/title")];
         let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
-        let mut sel = p.selection();
-        sel.attrs.push(&book);
+        let sel = p.select(&book);
         println!("{}", sess.explain(&sel)?);
 
         Ok(())
@@ -640,8 +654,7 @@ mod tests {
         let mut p = Projection::<Value>::default();
         let book_attrs = &[AttributeName::from_static(":book/title")];
         let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
-        let mut sel = p.selection();
-        sel.attrs.push(&book);
+        let sel = p.select(&book);
         println!("{}", sess.explain_plan(&sel)?);
 
         Ok(())
@@ -649,7 +662,7 @@ mod tests {
 
     #[test]
     fn upsert_maybe_i_guess() -> Result<()> {
-        let mut db = new_db()?;
+        let mut db = blank_db()?;
 
         let session = Session::new(&mut db)?;
         let name = session.new_attribute(":person/name")?;
@@ -663,6 +676,26 @@ mod tests {
         // eprintln!("{:#?}", d);
 
         session.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn retract() -> Result<()> {
+        let mut db = blank_db()?;
+
+        let session = Session::new(&mut db)?;
+
+        let name = session.new_attribute(":person/name")?;
+        let bob = session.new_entity()?;
+
+        session.assert(&bob, &name, &Value::Text("bob".to_owned()))?;
+
+        let pat = [pat!(?p name ?n)];
+        let prj = Projection::<Value>::from_patterns(&pat);
+        todo!();
+        // prj.selection()
+        // session.find
+
         Ok(())
     }
 
@@ -693,29 +726,28 @@ mod tests {
         let var_v = p.variable("v").cloned().unwrap();
         p.add_constraint(var_v.le(matter::Concept::Value(&max_rating)));
 
-        let book_attrs = vec![
+        let book_attrs = [
             AttributeName::from_static(":book/title"),
             AttributeName::from_static(":book/isbn"),
             AttributeName::from_static(":book/avg-rating"),
         ];
-        // let book_map = p.attribute_map("b", &book_attrs);
         let book_map = p.entity_group("b").unwrap().attribute_map(&book_attrs);
 
-        let rate_attrs = vec![
+        let rate_attrs = [
             AttributeName::from_static(":rating/user"),
             AttributeName::from_static(":rating/score"),
         ];
         let rate_map = p.entity_group("r").unwrap().attribute_map(&rate_attrs);
 
-        let mut sel = p.selection();
-        sel.attrs.push(&book_map);
-        sel.attrs.push(&rate_map);
-        // This is quite. Maybe it scans a temporary table instead of using an index?
-        // TODO investigate why
-        // sel.order_by.push(book_map.map[2].1.value_field().desc());
-        sel.limit = 8;
+        // let mut sel = p.selection();
+        // sel.attrs.push(&book_map);
+        // sel.attrs.push(&rate_map);
+        // // sel.order_by.push(book_map.map[2].1.value_field().desc());
+        // sel.limit(8);
 
-        let wow = sess.select(&sel)?;
+        let mut sel = p.select(&book_map);
+        sel.limit(8);
+        let wow = sess.find(&sel)?;
 
         let jaysons = serde_json::to_string_pretty(&wow)?;
         println!("{}", jaysons);

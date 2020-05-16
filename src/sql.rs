@@ -31,16 +31,175 @@ impl<T: ToSql + Debug> ToSqlDebug for T {}
 //     }
 // }
 
+// pub trait QueryColumns<'a> {
+//     type Item: AddToQuery;
+//     type Iter: Iterator<Item = Self::Item> + 'a;
+//
+//     fn columns(&'a self) -> Self::Iter;
+// }
+//
+// impl<'a, V> QueryColumns<'a> for &'a matter::AttributeMap<'a, V> {
+//     type Item = ReadDatomSetValue;
+//     type Iter = impl Iterator<Item = Self::Item> + 'a;
+//     // type Iter = std::slice::Iter<'a, &'a (&'a crate::AttributeName<'a>, DatomSet)>;
+//
+//     fn columns(&self) -> Self::Iter {
+//         self.map
+//             .iter()
+//             .map(|(_, datomset)| ReadDatomSetValue(*datomset))
+//     }
+// }
+//
+pub trait AddToQuery<P> {
+    fn add_to_query<W>(&self, _: &mut W)
+    where
+        W: QueryWriter<P>;
+}
+
+/// fuck
+impl<T, P> AddToQuery<P> for &'_ T
+where
+    T: AddToQuery<P>,
+{
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: QueryWriter<P>,
+    {
+        (*self).add_to_query(query)
+    }
+}
+
+impl<'a, P, T> AddToQuery<P> for matter::AttributeMap<'a, T> {
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: QueryWriter<P>,
+    {
+        println!("SDLKJFD");
+        for &(_, datomset) in &self.map {
+            println!("{:?}", datomset);
+            query
+                .nl()
+                .push_sql(&datomset_t(datomset))
+                .push_sql(", ")
+                .push_sql(&read_value(&datomset_t(datomset), &datomset_v(datomset)));
+        }
+    }
+}
+
+// struct ReadDatomSetValue(DatomSet);
+//
+// impl AddToQuery for ReadDatomSetValue {
+//     fn add_to_query(&self, query: &mut Query) -> fmt::Result {
+//         let datomset = self.0;
+//         write!(
+//             query,
+//             "{t}, {v}",
+//             t = &datomset_t(datomset),
+//             v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
+//         )
+//     }
+// }
+
+/// P is a generic for the query parameter type
+pub trait QueryWriter<P> {
+    fn add_param(&mut self, p: P) -> &mut Self;
+
+    fn push_sql(&mut self, s: &str) -> &mut Self;
+
+    fn nl(&mut self) -> &mut Self;
+
+    fn with_indent<I>(&mut self, indent: I) -> IndentedQueryWriter<&mut Self, I>
+    where
+        Self: Sized,
+        I: Iterator<Item = &'static str>,
+    {
+        let writer = self;
+        IndentedQueryWriter { writer, indent }
+    }
+}
+
+/// what the fucking fuck
+impl<W, P> QueryWriter<P> for &'_ mut W
+where
+    W: QueryWriter<P>,
+{
+    fn add_param(&mut self, p: P) -> &mut Self {
+        (*self).add_param(p);
+        self
+    }
+
+    fn push_sql(&mut self, s: &str) -> &mut Self {
+        (*self).push_sql(s);
+        self
+    }
+
+    fn nl(&mut self) -> &mut Self {
+        (*self).nl();
+        self
+    }
+}
+
+impl<P> QueryWriter<P> for GenericQuery<P> {
+    fn add_param(&mut self, p: P) -> &mut Self {
+        self.params.push(p);
+        self
+    }
+
+    fn push_sql(&mut self, s: &str) -> &mut Self {
+        self.string.push_str(s);
+        self
+    }
+
+    fn nl(&mut self) -> &mut Self {
+        self.string.push('\n');
+        self
+    }
+}
+
 #[derive(Debug)]
-pub struct GenericQuery<T> {
+pub struct IndentedQueryWriter<W, I> {
+    writer: W,
+    indent: I,
+}
+
+impl<W, I, P> QueryWriter<P> for IndentedQueryWriter<W, I>
+where
+    W: QueryWriter<P>,
+    /* I can't use a generic lifetime here for some reason?
+     * Maybe because https://github.com/rust-lang/rust/issues/49601
+     * I have no idea ... */
+    I: Iterator<Item = &'static str>,
+{
+    fn add_param(&mut self, p: P) -> &mut Self {
+        self.writer.add_param(p);
+        self
+    }
+
+    fn push_sql(&mut self, s: &str) -> &mut Self {
+        self.writer.push_sql(s);
+        self
+    }
+
+    fn nl(&mut self) -> &mut Self {
+        self.writer.nl();
+        if let Some(i) = self.indent.next() {
+            self.writer.push_sql(i);
+        }
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct GenericQuery<P> {
     string: String,
     /// TODO limit this somehow because sqlite max params is like 999
-    params: Vec<T>,
+    params: Vec<P>,
+    // params_exceeded: bool,
 }
 
 pub type Query<'a> = GenericQuery<&'a dyn ToSqlDebug>;
 
-impl<T> Default for GenericQuery<T> {
+impl<P> Default for GenericQuery<P> {
     fn default() -> Self {
         GenericQuery {
             string: String::new(),
@@ -49,13 +208,13 @@ impl<T> Default for GenericQuery<T> {
     }
 }
 
-impl<T> fmt::Display for GenericQuery<T> {
+impl<P> fmt::Display for GenericQuery<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.string, f)
     }
 }
 
-impl<T> Deref for GenericQuery<T> {
+impl<P> Deref for GenericQuery<P> {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -63,21 +222,19 @@ impl<T> Deref for GenericQuery<T> {
     }
 }
 
-impl<T> DerefMut for GenericQuery<T> {
+impl<P> DerefMut for GenericQuery<P> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.string
     }
 }
 
-impl<T> Write for GenericQuery<T> {
+impl<P> Write for GenericQuery<P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.string.write_str(s)
     }
 }
 
-// todo; implement From for all ToString?
-
-impl<T> From<String> for GenericQuery<T> {
+impl<P> From<String> for GenericQuery<P> {
     fn from(string: String) -> Self {
         GenericQuery {
             string,
@@ -86,7 +243,7 @@ impl<T> From<String> for GenericQuery<T> {
     }
 }
 
-impl<'a, T> From<&'a str> for GenericQuery<T> {
+impl<'a, P> From<&'a str> for GenericQuery<P> {
     fn from(s: &'a str) -> Self {
         GenericQuery {
             string: s.to_string(),
@@ -107,11 +264,7 @@ impl GenericQuery<&dyn ToSqlDebug> {
     }
 }
 
-impl<T> GenericQuery<T> {
-    pub fn add_param(&mut self, p: T) {
-        self.params.push(p)
-    }
-
+impl<P> GenericQuery<P> {
     pub fn push(&mut self, s: &str) -> &mut Self {
         self.push_str(s);
         self
@@ -223,32 +376,21 @@ pub fn datomset_v(datomset: DatomSet) -> String {
     format!("_dtm{}.v", datomset.0)
 }
 
-pub fn selection_sql<'q, 'a: 'q, V>(
+/// TODO XXX FIXME the V and S types are supposed to be related somehow?
+///     S: AddToQuery<V> or S: AddToQuery<&V> ???
+pub fn selection_sql<'q, 'a: 'q, V, S>(
     // TODO use different lifetimes for 'a?
-    s: &'a matter::Selection<'a, V>,
+    s: &'a matter::Selection<'a, V, S>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
-    V: Debug + ToSql,
+    V: ToSqlDebug,
+    S: AddToQuery<&'a dyn ToSqlDebug>,
 {
-    let mut pre = std::iter::once("SELECT ").chain(std::iter::repeat("     , "));
+    use std::iter::{once, repeat};
 
-    for l in s.columns() {
-        query.push_str(pre.next().unwrap());
-        let col_str = match l.field {
-            Field::Entity => read_entity(&location(l)),
-            Field::Attribute => todo!("read_entity() instead?"), //read_attribute(&location(l)),
-            Field::Value => read_value(&datomset_t(l.datomset), &datomset_v(l.datomset)),
-        };
-        query.push_str(&col_str);
-        query.push_str("\n");
-    }
-
-    for (pre, col_fn) in pre.zip(s.attrs.iter().map(|a| a.result_columns()).flatten()) {
-        query.push_str(pre);
-        col_fn(query)?;
-        query.deref_mut().push('\n');
-    }
+    let mut select_writer = query.with_indent(once("SELECT ").chain(repeat("     , ")));
+    s.columns.add_to_query(&mut select_writer);
 
     projection_sql(s.projection, query)?;
 
@@ -361,4 +503,29 @@ fn test_cursored_get() -> rusqlite::Result<()> {
     })?;
     assert_eq!(foo, (1, 2, 3));
     Ok(())
+}
+
+pub trait ReadFromRow {
+    type Out;
+
+    fn read_from_row(&self, _: &mut RowCursor) -> rusqlite::Result<Self::Out>
+    where
+        Self: Sized;
+}
+
+impl<'a, V> ReadFromRow for matter::AttributeMap<'a, V>
+where
+    V: crate::FromAffinityValue,
+{
+    type Out = std::collections::HashMap<&'a crate::AttributeName<'a>, V>;
+
+    fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+        self.map
+            .iter()
+            .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
+                let value = V::read_affinity_value(c)?;
+                Ok((*attr, value))
+            })
+            .collect()
+    }
 }

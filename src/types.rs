@@ -62,6 +62,12 @@ impl From<&'static str> for AttributeName<'static> {
     }
 }
 
+impl<'a> From<Attribute<'a>> for AttributeName<'a> {
+    fn from(attr: Attribute<'a>) -> Self {
+        attr.ident
+    }
+}
+
 impl<'a> TryFrom<Cow<'a, str>> for AttributeName<'a> {
     type Error = String;
 

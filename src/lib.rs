@@ -125,21 +125,24 @@ pub struct Session<'db> {
 
 impl<'db> Session<'db> {
     pub fn new(db: &'db mut rusqlite::Connection) -> rusqlite::Result<Self> {
-        let tx = db.transaction()?;
+        let mut tx = db.transaction()?;
+        Self::setup_views(&mut tx)?;
+        Ok(Session { tx })
+    }
 
-        // Views are attached to the lifetime of the connection, not the transaction ...
-        // ... so guard with IF NOT EXISTS.
-
-        let attributes = format!(
-            "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
+    /// Views are attached to the lifetime of the connection, not the transaction ...
+    /// ... so guard with IF NOT EXISTS.
+    fn setup_views(db: &mut rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        db.execute(
+            &format!(
+                "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
                  AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
-            ATTR_IDENT_ROWID, T_ATTRIBUTE,
-        );
-        // eprintln!("[DEBUG] sql: ...");
-        // eprintln!("{}", attributes);
-        tx.execute(&attributes, rusqlite::NO_PARAMS)?;
+                ATTR_IDENT_ROWID, T_ATTRIBUTE,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
 
-        tx.execute(
+        db.execute(
             &format!(
                 "CREATE TRIGGER
                   IF NOT EXISTS create_entity_uuid_datoms
@@ -153,7 +156,7 @@ impl<'db> Session<'db> {
             rusqlite::NO_PARAMS,
         )?;
 
-        tx.execute(
+        db.execute(
             &format!(
                 "CREATE TEMPORARY TRIGGER
                   IF NOT EXISTS accurate_entity_uuid_datoms
@@ -169,7 +172,7 @@ impl<'db> Session<'db> {
             rusqlite::NO_PARAMS,
         )?;
 
-        tx.execute(
+        db.execute(
             &format!(
                 "CREATE TEMPORARY TRIGGER
                   IF NOT EXISTS immutable_entity_uuid_datoms
@@ -182,12 +185,14 @@ impl<'db> Session<'db> {
             rusqlite::NO_PARAMS,
         )?;
 
-        Ok(Session { tx })
+        Ok(())
     }
 
     pub fn init_schema(db: &'db mut rusqlite::Connection) -> rusqlite::Result<()> {
-        let tx = db.transaction()?;
+        let mut tx = db.transaction()?;
         tx.execute_batch(SCHEMA)?;
+
+        Self::setup_views(&mut tx)?;
 
         // Create the initial attributes, this isn't part of SCHEMA because sqlite can't make its
         // own UUIDs (unless we just use random 128 bit blobs ...) and I'm avoiding database

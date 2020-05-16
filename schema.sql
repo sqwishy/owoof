@@ -30,6 +30,7 @@ create table "datoms"
     );
 
 -- thinkingface.jpg
+-- TODO some attributes must be unique for the database ...? like :attr/ident?
 create unique index "datoms_ea"  on "datoms" (e, a);
 
 create        index "datoms_eav" on "datoms" (e, a, t, v);

@@ -237,15 +237,25 @@ pub trait FromAffinityValue {
     where
         Self: Sized;
 
+    fn read_with_affinity<'a>(
+        affinity: Affinity,
+        v_ref: rusqlite::types::ValueRef,
+    ) -> rusqlite::Result<Self>
+    where
+        Self: Sized,
+    {
+        Self::from_affinity_value(affinity, v_ref)
+            .with_context(|| format!("reading value {:?} with affinity {:?}", v_ref, affinity))
+            .map_err(|e| rusqlite::types::FromSqlError::Other(e.into()).into())
+    }
+
     fn read_affinity_value<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
     where
         Self: Sized,
     {
         let affinity = c.get::<Affinity>()?;
         let v_ref = c.get_raw();
-        let v = Self::from_affinity_value(affinity, v_ref)
-            .with_context(|| format!("reading value {:?} with affinity {:?}", v_ref, affinity))
-            .map_err(|e| rusqlite::types::FromSqlError::Other(e.into()))?;
+        let v = Self::read_with_affinity(affinity, v_ref)?;
         Ok(v)
     }
 }

@@ -110,6 +110,8 @@ pub enum Error {
     NotUniqueForEntity,
     #[error("{0} is immutable")]
     Immutable(&'static str),
+    #[error("could not retract what doesn't exist")]
+    NotFound,
     #[error("sql error")]
     Sql(#[from] rusqlite::Error),
 }
@@ -370,13 +372,68 @@ impl<'db> Session<'db> {
         Ok(())
     }
 
+    /// How should this even work?
+    /// - Should we find the datoms and then delete them by rowid?
     pub fn retract<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
         E: RowIdOr<EntityName>,
         A: RowIdOr<AttributeName<'z>>,
         T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
-        todo!()
+        let e_variant = e.row_id_or();
+        let (e, e_bind_str) = match e_variant.as_ref() {
+            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
+            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
+        };
+
+        let a_variant = a.row_id_or();
+        let (a, a_bind_str) = match a_variant.as_ref() {
+            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
+            either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
+        };
+
+        let (t, v_bind_str) = v.affinity().t_and_bind();
+
+        let sql = format!(
+            r#"
+        DELETE FROM datoms
+              WHERE e={e}
+                AND a={a}
+                AND t=?
+                AND v={v}"#,
+            e = e_bind_str,
+            a = a_bind_str,
+            v = v_bind_str,
+        );
+
+        let mut stmt = self.tx.prepare(&sql)?;
+        match stmt.execute(&[
+            e as &dyn rusqlite::ToSql,
+            a as &dyn rusqlite::ToSql,
+            &t as &dyn rusqlite::ToSql,
+            v,
+        ]) {
+            Ok(0) => Err(Error::NotFound),
+            Ok(n) => Ok(assert_eq!(n, 1)),
+            Err(e) => match &e {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                        extended_code,
+                    },
+                    Some(msg),
+                ) => match (extended_code, msg.as_str()) {
+                    (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
+                        Err(Error::Immutable(":entity/id"))
+                    }
+                    (&SQLITE_CONSTRAINT_UNIQUE, msg) if msg.starts_with("UNIQUE") => {
+                        Err(Error::NotUniqueForEntity)
+                    }
+                    _ => Err(e.into()),
+                },
+                _ => Err(e.into()),
+            },
+        }
     }
 
     /// for debugging ... use with T as rusqlite::types::Value
@@ -676,15 +733,47 @@ mod tests {
 
         let name = session.new_attribute(":person/name")?;
         let bob = session.new_entity()?;
+        let bobs_name = Value::Text("bob".to_owned());
+
+        session.assert(&bob, &name, &bobs_name)?;
+
+        let pat = [pat!(?p ":person/name" ?n)];
+        let mut prj = Projection::<Value>::from_patterns(&pat);
+        let sel = prj.select((prj.var("p").unwrap(), prj.var("n").unwrap()));
+
+        assert_eq!(
+            session.find(&sel)?,
+            // TODO for the love of god please stop calling attribute idents and entity ids names
+            // ... please fuck
+            vec![(Value::Entity(bob.name), bobs_name.clone())],
+        );
+
+        session.retract(&bob, &name, &bobs_name)?;
+
+        assert_eq!(session.find(&sel)?, vec![]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_location() -> Result<()> {
+        let mut db = blank_db()?;
+
+        let session = Session::new(&mut db)?;
+
+        let name = session.new_attribute(":person/name")?;
+        let bob = session.new_entity()?;
 
         session.assert(&bob, &name, &Value::Text("bob".to_owned()))?;
 
-        let pat = [pat!(?p name ?n)];
-        let prj = Projection::<Value>::from_patterns(&pat);
-        todo!();
-        // prj.selection()
-        // session.find
-
+        let pat = [pat!(?p ?a ?n)];
+        let mut prj = Projection::<Value>::from_patterns(&pat);
+        let sel = prj.select((
+            prj.var("p").unwrap(),
+            prj.var("a").unwrap(),
+            prj.var("n").unwrap(),
+        ));
+        let _wow = session.find(&sel)?;
         Ok(())
     }
 
@@ -712,7 +801,7 @@ mod tests {
         let mut p = Projection::<Value>::default();
         p.add_patterns(&patterns);
 
-        let var_v = p.variable("v").cloned().unwrap();
+        let var_v = p.var("v").unwrap();
         p.add_constraint(var_v.le(matter::Concept::Value(&max_rating)));
 
         let book_attrs = [

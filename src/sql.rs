@@ -34,15 +34,32 @@ impl<'a, P, T> AddToQuery<P> for matter::AttributeMap<'a, T> {
     where
         W: QueryWriter<P>,
     {
-        println!("SDLKJFD");
         for &(_, datomset) in &self.map {
-            println!("{:?}", datomset);
             query
                 .nl()
                 .push_sql(&datomset_t(datomset))
                 .push_sql(", ")
                 .push_sql(&read_value(&datomset_t(datomset), &datomset_v(datomset)));
         }
+    }
+}
+
+impl<P> AddToQuery<P> for matter::Location {
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: QueryWriter<P>,
+    {
+        let &matter::Location { field, datomset } = self;
+
+        query.nl();
+        match field {
+            Field::Entity => query.push_sql(&read_entity(&datomset_e(datomset))),
+            Field::Attribute => query.push_sql(&read_attribute(&datomset_a(datomset))),
+            Field::Value => query
+                .push_sql(&datomset_t(datomset))
+                .push_sql(", ")
+                .push_sql(&read_value(&datomset_t(datomset), &datomset_v(datomset))),
+        };
     }
 }
 
@@ -309,17 +326,6 @@ where
     Ok(())
 }
 
-// impl SqlStringable for matter::Location {
-//     fn append_sql<W: Write>(&self, w: W) -> fmt::Result {
-//         let column = match self.field {
-//             Field::Entity => "e",
-//             Field::Attribute => "a",
-//             Field::Value => "v",
-//         };
-//         write!(w, "_dtm{}.{}", self.datomset.0, column)
-//     }
-// }
-
 pub fn location_sql<W: Write>(l: &matter::Location, w: &mut W) -> fmt::Result {
     write!(w, "{}", location(l))
 }
@@ -511,6 +517,27 @@ where
     }
 }
 
+impl ReadFromRow for matter::Location {
+    /// TODO the whole point of the phantom data in AttributeMap is to disambiguate this
+    /// type ... so that we can share the same value types in both directions of the
+    /// database.
+    ///
+    /// We don't have that here, so we need to modify the trait so that users can
+    /// specify what kind of container things can be dumped into as long as it
+    /// implements FromAffinityValue.
+    type Out = crate::Value;
+
+    fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+        use crate::types::{Affinity, FromAffinityValue, Value};
+
+        match self.field {
+            Field::Entity => Value::read_with_affinity(Affinity::Entity, c.get_raw()),
+            Field::Attribute => Value::read_with_affinity(Affinity::Attribute, c.get_raw()),
+            Field::Value => Value::read_affinity_value(c),
+        }
+    }
+}
+
 macro_rules! read_tuple_from_row {
     ( $( $t:ident )+ ) => {
         impl<$($t: ReadFromRow),+> ReadFromRow for ($($t,)+)
@@ -520,8 +547,8 @@ macro_rules! read_tuple_from_row {
             fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
                 #[allow(non_snake_case)]
                 let ($($t,)+) = self;
-                let out = ($( $t.read_from_row(c)?, )+);
-                Ok(out)
+                let boomer = ($( $t.read_from_row(c)?, )+);
+                Ok(boomer)
             }
         }
     };

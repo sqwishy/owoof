@@ -309,8 +309,12 @@ where
     }
 
     /// Return the first location (if any) where this variable was used.
-    pub fn variable(&self, n: &str) -> Option<&Location> {
-        self.variables.get(n)
+    pub fn variable(&self, n: &str) -> Option<Location> {
+        self.variables.get(n).cloned()
+    }
+
+    pub fn var(&self, n: &str) -> Option<Location> {
+        self.variable(n)
     }
 
     /// Find all locations constrained to this variable.
@@ -362,7 +366,7 @@ where
     fn constrain_variable(&mut self, variable: &'a str, location: Location) {
         if variable == ANONYMOUS {
         } else if let Some(prior) = self.variable(variable) {
-            let equal_to_prior = location.constrained_to(*prior);
+            let equal_to_prior = location.constrained_to(prior);
             self.constraints.push(equal_to_prior);
         } else {
             self.variables.insert(variable, location);
@@ -382,7 +386,6 @@ where
         }
     }
 
-    // TODO, does this actually have to borrow pattern like this or just Pattern<'p, ..>?
     pub fn add_pattern<'p: 'a>(&mut self, pattern: &'p Pattern<V>) -> DatomSet {
         let Pattern {
             entity,

@@ -718,9 +718,6 @@ mod tests {
         let res = session.assert(&bob, &name, &Value::Text("jim".to_owned()));
         assert_eq!(res, Err(Error::NotUniqueForEntity));
 
-        // let d = session.all_datoms()?;
-        // eprintln!("{:#?}", d);
-
         session.commit()?;
         Ok(())
     }
@@ -749,6 +746,11 @@ mod tests {
         session.retract(&bob, &name, &bobs_name)?;
 
         assert_eq!(session.find(&sel)?, vec![]);
+
+        assert_eq!(
+            Err(Error::NotFound),
+            session.retract(&bob, &name, &bobs_name)
+        );
 
         Ok(())
     }

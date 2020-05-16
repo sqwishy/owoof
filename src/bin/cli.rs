@@ -63,7 +63,7 @@ impl<'a> Command<'a> {
                     OwO::Many(stuff) => todo!("{:?}", stuff),
                     OwO::One(stuff) => {
                         let ent = sess.assert_obj(&stuff).context("assert object")?;
-                        let jaysons = serde_json::to_string_pretty(&ent.name)?;
+                        let jaysons = serde_json::to_string_pretty(&ent.id)?;
                         println!("{}", jaysons);
                     }
                 };
@@ -107,26 +107,26 @@ impl<'a> Command<'a> {
                 let start = std::time::Instant::now();
 
                 let mut p = oof::Projection::from_patterns(&patterns);
-                let mut sel = p.selection();
 
                 let mappings = maps
                     .iter()
-                    .map(|(var, attrs)| sel.attribute_map(var, attrs))
+                    .map(|(var, attrs)| p.attribute_map(var, attrs))
                     .collect::<Vec<_>>();
-                sel.attrs.extend(mappings.iter());
 
-                sel.order_by = order
-                    .iter()
-                    .flat_map(|(var, attrs, ord)| {
-                        sel.attribute_map(var, attrs)
-                            .into_value_locations()
-                            .map(move |loc| (loc, *ord))
-                    })
-                    .collect();
+                let mut sel = p.select(mappings.as_slice());
 
-                sel.limit = limit;
+                // todo use the function chain call whatever thing
+                order.iter().for_each(|(var, attrs, ord)| {
+                    sel.attribute_map(var, attrs)
+                        .into_value_locations()
+                        .for_each(|loc| {
+                            sel.order_by((loc, *ord));
+                        })
+                });
 
-                let results = sess.select(&sel).context("select")?;
+                sel.limit(limit);
+
+                let results = sess.find(&sel).context("find")?;
                 let jaysons = serde_json::to_string_pretty(&results)?;
                 let end = std::time::Instant::now();
                 println!("{}", jaysons);
@@ -289,7 +289,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
                 .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
                 .or_else(|_| {
                     e.parse::<uuid::Uuid>()
-                        .map(oof::EntityName::from)
+                        .map(oof::EntityId::from)
                         .map(oof::VariableOr::Value)
                 })?;
 

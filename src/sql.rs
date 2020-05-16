@@ -63,6 +63,20 @@ impl<P> AddToQuery<P> for matter::Location {
     }
 }
 
+impl<T, P> AddToQuery<P> for &[T]
+where
+    T: AddToQuery<P>,
+{
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: QueryWriter<P>,
+    {
+        for t in self.iter() {
+            t.add_to_query(query)
+        }
+    }
+}
+
 macro_rules! add_tuple_to_query {
     ( $( $t:ident )+ ) => {
         impl<_P, $($t: AddToQuery<_P>),+> AddToQuery<_P> for ($($t,)+)
@@ -535,6 +549,17 @@ impl ReadFromRow for matter::Location {
             Field::Attribute => Value::read_with_affinity(Affinity::Attribute, c.get_raw()),
             Field::Value => Value::read_affinity_value(c),
         }
+    }
+}
+
+impl<T> ReadFromRow for &[T]
+where
+    T: ReadFromRow,
+{
+    type Out = Vec<<T as ReadFromRow>::Out>;
+
+    fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+        self.iter().map(|t| t.read_from_row(c)).collect()
     }
 }
 

@@ -558,16 +558,6 @@ pub struct Selection<'a, 'p, V, S> {
 }
 
 impl<'a, 'p, V, S> Selection<'a, 'p, V, S> {
-    // pub fn find(
-    //     &self,
-    //     session: &mut crate::Session,
-    // ) -> rusqlite::Result<Vec<Vec<HashMap<&'s AttributeName<'s>, V>>>>
-    // where
-    //     V: crate::FromAffinityValue + crate::Assertable + rusqlite::ToSql + fmt::Debug,
-    // {
-    //     session.find(self)
-    // }
-
     pub fn limit(&mut self, limit: i64) -> &mut Self {
         self.limit = limit;
         self

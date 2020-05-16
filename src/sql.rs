@@ -350,9 +350,9 @@ pub fn datomset_v(datomset: DatomSet) -> String {
 
 /// TODO XXX FIXME the V and S types are supposed to be related somehow?
 ///     S: AddToQuery<V> or S: AddToQuery<&V> ???
-pub fn selection_sql<'q, 'a: 'q, V, S>(
+pub fn selection_sql<'q, 'a: 'q, 'p, V, S>(
     // TODO use different lifetimes for 'a?
-    s: &'a matter::Selection<'a, V, S>,
+    s: &'a matter::Selection<'a, 'p, V, S>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where

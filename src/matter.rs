@@ -416,7 +416,7 @@ where
         self.constraints.push(c);
     }
 
-    pub fn select<S>(&'a mut self, s: S) -> Selection<'a, V, S> {
+    pub fn select<'s, S>(&'s mut self, s: S) -> Selection<'s, 'a, V, S> {
         Selection {
             projection: self,
             columns: s,
@@ -456,6 +456,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct EntityGroup<'a, 'p, V> {
     projection: &'a mut Projection<'p, V>,
     var: &'p str,
@@ -546,14 +547,14 @@ impl<'a, V> AttributeMap<'a, V> {
 }
 
 #[derive(Debug)]
-pub struct Selection<'a, V, S> {
-    pub projection: &'a mut Projection<'a, V>,
+pub struct Selection<'a, 'p, V, S> {
+    pub projection: &'a mut Projection<'p, V>,
     pub columns: S,
     pub order_by: Vec<(Location, Ordering)>,
     pub limit: i64,
 }
 
-impl<'a, V, S> Selection<'a, V, S> {
+impl<'a, 'p, V, S> Selection<'a, 'p, V, S> {
     // pub fn find(
     //     &self,
     //     session: &mut crate::Session,
@@ -575,15 +576,15 @@ impl<'a, V, S> Selection<'a, V, S> {
     }
 }
 
-impl<'a, V, S> Deref for Selection<'a, V, S> {
-    type Target = Projection<'a, V>;
+impl<'a, 'p, V, S> Deref for Selection<'a, 'p, V, S> {
+    type Target = Projection<'p, V>;
 
     fn deref(&self) -> &Self::Target {
         &self.projection
     }
 }
 
-impl<'a, V, S> DerefMut for Selection<'a, V, S> {
+impl<'a, 'p, V, S> DerefMut for Selection<'a, 'p, V, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.projection
     }

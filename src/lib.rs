@@ -403,9 +403,9 @@ impl<'db> Session<'db> {
 
     /// TODO use trait for return type so the user can avoid double-vectorings and write things
     /// that can read from column?
-    pub fn find<'s, V, S>(
+    pub fn find<'s, 'p, V, S>(
         &self,
-        s: &'s Selection<'s, V, S>,
+        s: &'s Selection<'s, 'p, V, S>,
     ) -> rusqlite::Result<Vec<<S as sql::ReadFromRow>::Out>>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
@@ -441,7 +441,10 @@ impl<'db> Session<'db> {
         rows.collect()
     }
 
-    pub fn explain<'s, V, S>(&self, s: &'s Selection<'s, V, S>) -> rusqlite::Result<Explanation>
+    pub fn explain<'s, 'p, V, S>(
+        &self,
+        s: &'s Selection<'s, 'p, V, S>,
+    ) -> rusqlite::Result<Explanation>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
         S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
@@ -461,9 +464,9 @@ impl<'db> Session<'db> {
             .map(|lines| Explanation { lines })
     }
 
-    pub fn explain_plan<'s, V, S>(
+    pub fn explain_plan<'s, 'p, V, S>(
         &self,
-        s: &'s Selection<'s, V, S>,
+        s: &'s Selection<'s, 'p, V, S>,
     ) -> rusqlite::Result<PlanExplanation>
     where
         V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
@@ -725,16 +728,8 @@ mod tests {
         ];
         let rate_map = p.entity_group("r").unwrap().attribute_map(&rate_attrs);
 
-        // let mut sel = p.selection();
-        // sel.attrs.push(&book_map);
-        // sel.attrs.push(&rate_map);
-        // // sel.order_by.push(book_map.map[2].1.value_field().desc());
-        // sel.limit(8);
-
-        // TODO fix lifetimes
-        // {
-        //     let _ = p.select(&book_map);
-        // };
+        // just make sure this compiles ...
+        let _ = p.select(&book_map);
 
         let mut sel = p.select((&book_map, &rate_map));
         sel.limit(8);

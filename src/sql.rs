@@ -10,46 +10,6 @@ use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Pr
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
 
-// pub trait SqlQueryable {
-//     fn append_query<'s>(&'s self, _: &'s mut Query);
-// }
-//
-// pub trait SqlStringable {
-//     fn append_sql<W: Write>(&self, _: W) -> fmt::Result;
-// }
-//
-// impl<T: SqlStringable> SqlQueryable for T {
-//     fn append_query<'s>(&'s self, query: &'s mut Query) {
-//         let _ = SqlStringable::append_sql(self, &mut query);
-//     }
-// }
-
-// /// Gives us ToString for free ...
-// impl<T: SqlStringable> fmt::Display for T {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         self.append_sql(f)
-//     }
-// }
-
-// pub trait QueryColumns<'a> {
-//     type Item: AddToQuery;
-//     type Iter: Iterator<Item = Self::Item> + 'a;
-//
-//     fn columns(&'a self) -> Self::Iter;
-// }
-//
-// impl<'a, V> QueryColumns<'a> for &'a matter::AttributeMap<'a, V> {
-//     type Item = ReadDatomSetValue;
-//     type Iter = impl Iterator<Item = Self::Item> + 'a;
-//     // type Iter = std::slice::Iter<'a, &'a (&'a crate::AttributeName<'a>, DatomSet)>;
-//
-//     fn columns(&self) -> Self::Iter {
-//         self.map
-//             .iter()
-//             .map(|(_, datomset)| ReadDatomSetValue(*datomset))
-//     }
-// }
-//
 pub trait AddToQuery<P> {
     fn add_to_query<W>(&self, _: &mut W)
     where
@@ -86,19 +46,31 @@ impl<'a, P, T> AddToQuery<P> for matter::AttributeMap<'a, T> {
     }
 }
 
-// struct ReadDatomSetValue(DatomSet);
-//
-// impl AddToQuery for ReadDatomSetValue {
-//     fn add_to_query(&self, query: &mut Query) -> fmt::Result {
-//         let datomset = self.0;
-//         write!(
-//             query,
-//             "{t}, {v}",
-//             t = &datomset_t(datomset),
-//             v = &read_value(&datomset_t(datomset), &datomset_v(datomset)),
-//         )
-//     }
-// }
+macro_rules! add_tuple_to_query {
+    ( $( $t:ident )+ ) => {
+        impl<_P, $($t: AddToQuery<_P>),+> AddToQuery<_P> for ($($t,)+)
+        {
+            fn add_to_query<W>(&self, query: &mut W)
+            where
+                W: QueryWriter<_P>
+            {
+                #[allow(non_snake_case)]
+                let ($($t,)+) = self;
+                $( $t.add_to_query(query); )+
+            }
+        }
+    };
+}
+
+add_tuple_to_query!(A);
+add_tuple_to_query!(A B);
+add_tuple_to_query!(A B C);
+add_tuple_to_query!(A B C D);
+add_tuple_to_query!(A B C D E);
+add_tuple_to_query!(A B C D E F);
+add_tuple_to_query!(A B C D E F G);
+add_tuple_to_query!(A B C D E F G H);
+add_tuple_to_query!(A B C D E F G H I);
 
 /// P is a generic for the query parameter type
 pub trait QueryWriter<P> {
@@ -508,9 +480,19 @@ fn test_cursored_get() -> rusqlite::Result<()> {
 pub trait ReadFromRow {
     type Out;
 
-    fn read_from_row(&self, _: &mut RowCursor) -> rusqlite::Result<Self::Out>
-    where
-        Self: Sized;
+    fn read_from_row(&self, _: &mut RowCursor) -> rusqlite::Result<Self::Out>;
+}
+
+/// motherfuckingchrist
+impl<T> ReadFromRow for &'_ T
+where
+    T: ReadFromRow,
+{
+    type Out = <T as ReadFromRow>::Out;
+
+    fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+        (*self).read_from_row(c)
+    }
 }
 
 impl<'a, V> ReadFromRow for matter::AttributeMap<'a, V>
@@ -522,10 +504,35 @@ where
     fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
         self.map
             .iter()
-            .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-                let value = V::read_affinity_value(c)?;
-                Ok((*attr, value))
+            .map(|&(attr, _)| -> rusqlite::Result<(_, _)> {
+                Ok((attr, V::read_affinity_value(c)?))
             })
             .collect()
     }
 }
+
+macro_rules! read_tuple_from_row {
+    ( $( $t:ident )+ ) => {
+        impl<$($t: ReadFromRow),+> ReadFromRow for ($($t,)+)
+        {
+            type Out = ($(<$t as ReadFromRow>::Out,)+);
+
+            fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+                #[allow(non_snake_case)]
+                let ($($t,)+) = self;
+                let out = ($( $t.read_from_row(c)?, )+);
+                Ok(out)
+            }
+        }
+    };
+}
+
+read_tuple_from_row!(A);
+read_tuple_from_row!(A B);
+read_tuple_from_row!(A B C);
+read_tuple_from_row!(A B C D);
+read_tuple_from_row!(A B C D E);
+read_tuple_from_row!(A B C D E F);
+read_tuple_from_row!(A B C D E F G);
+read_tuple_from_row!(A B C D E F G H);
+read_tuple_from_row!(A B C D E F G H I);

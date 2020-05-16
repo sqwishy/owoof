@@ -416,7 +416,7 @@ where
         self.constraints.push(c);
     }
 
-    pub fn select<S>(&'a mut self, s: &'a S) -> Selection<'a, V, S> {
+    pub fn select<S>(&'a mut self, s: S) -> Selection<'a, V, S> {
         Selection {
             projection: self,
             columns: s,
@@ -548,7 +548,7 @@ impl<'a, V> AttributeMap<'a, V> {
 #[derive(Debug)]
 pub struct Selection<'a, V, S> {
     pub projection: &'a mut Projection<'a, V>,
-    pub columns: &'a S,
+    pub columns: S,
     pub order_by: Vec<(Location, Ordering)>,
     pub limit: i64,
 }

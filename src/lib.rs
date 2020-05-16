@@ -422,21 +422,7 @@ impl<'db> Session<'db> {
 
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
-
             s.columns.read_from_row(&mut c)
-
-            // s.attrs
-            //     .iter()
-            //     .map(|a| {
-            //         a.map
-            //             .iter()
-            //             .map(|(attr, _)| -> rusqlite::Result<(_, _)> {
-            //                 let value = V::read_affinity_value(&mut c)?;
-            //                 Ok((*attr, value))
-            //             })
-            //             .collect::<rusqlite::Result<HashMap<_, _>>>()
-            //     })
-            //     .collect::<rusqlite::Result<Vec<_>>>()
 
             // TODO UUHSDFUSDHFJ
             // s.columns()
@@ -745,7 +731,12 @@ mod tests {
         // // sel.order_by.push(book_map.map[2].1.value_field().desc());
         // sel.limit(8);
 
-        let mut sel = p.select(&book_map);
+        // TODO fix lifetimes
+        // {
+        //     let _ = p.select(&book_map);
+        // };
+
+        let mut sel = p.select((&book_map, &rate_map));
         sel.limit(8);
         let wow = sess.find(&sel)?;
 

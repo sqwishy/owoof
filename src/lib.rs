@@ -513,20 +513,19 @@ impl<'db> Session<'db> {
     /// for debugging ... use with T as rusqlite::types::Value
     pub fn all_datoms(
         &self,
-    ) -> rusqlite::Result<Vec<(EntityId, String, Affinity, rusqlite::types::Value)>> {
-        // TODO this ignores the t value
+    ) -> rusqlite::Result<Vec<(i64, String, Affinity, rusqlite::types::Value, i64)>> {
         let sql = r#"
-            SELECT entities.uuid, attributes.ident, t, v
+            SELECT e, attributes.ident, t, v, unique_for_attribute
               FROM datoms
-              JOIN entities   ON datoms.e = entities.rowid
               JOIN attributes ON datoms.a = attributes.rowid"#;
         let mut stmt = self.tx.prepare(sql)?;
         let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
             Ok((
-                row.get::<_, uuid::Uuid>(0)?.into(),
+                row.get(0)?,
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
+                row.get(4)?,
             ))
         })?;
         rows.collect::<_>()
@@ -554,19 +553,6 @@ impl<'db> Session<'db> {
         let rows = stmt.query_map(q.params(), |row| {
             let mut c = sql::RowCursor::from(row);
             s.columns.read_from_row(&mut c)
-
-            // TODO UUHSDFUSDHFJ
-            // s.columns()
-            //     .iter()
-            //     .map(|loc| -> rusqlite::Result<Value> {
-            //         use matter::Field;
-            //         Ok(match loc.field {
-            //             Field::Entity => Value::Entity(EntityId(c.get()?)),
-            //             Field::Attribute => Value::Attribute(c.get()?),
-            //             Field::Value => Value::read_affinity_value(&mut c)?,
-            //         })
-            //     })
-            //     .collect::<rusqlite::Result<Vec<Value>>>()
         })?;
 
         rows.collect()
@@ -781,16 +767,76 @@ mod tests {
     }
 
     #[test]
-    fn unique_for_attribute() -> Result<()> {
-        let mut db = blank_db()?;
-        let session = Session::new(&mut db)?;
-        session.new_attribute(":person/name")?;
-        assert_eq!(
-            session.new_attribute(":person/name"),
-            Err(Error::NotUniqueForAttribute)
-        );
-        session.commit()?;
-        Ok(())
+    fn unique_for_attribute() {
+        let mut db = blank_db().unwrap();
+
+        /* :attr/ident is unique for attribute */
+        {
+            let session = Session::new(&mut db).unwrap();
+            session.new_attribute(":foo/bar").unwrap();
+            assert_eq!(
+                session.new_attribute(":foo/bar"),
+                Err(Error::NotUniqueForAttribute)
+            );
+        };
+
+        let session = Session::new(&mut db).unwrap();
+        let name = session.new_attribute(":person/name").unwrap();
+        let bob1 = session.new_entity().unwrap();
+        let bob2 = session.new_entity().unwrap();
+        let bob_name = Value::Text("Bob".to_owned());
+        session.assert(&bob1, &name, &bob_name).unwrap();
+        session.commit().unwrap();
+
+        /* make :person/name unique for attribute _after_ non-unique data exists */
+        {
+            let session = Session::new(&mut db).unwrap();
+            session.assert(&bob2, &name, &bob_name).unwrap();
+            let res = session.assert(
+                &name,
+                &AttributeName::from_static(":attr/unique"),
+                &Value::Integer(1),
+            );
+            assert_eq!(res, Err(Error::NotUniqueForAttribute));
+        };
+
+        /* make :person/name unique for attribute and then add data */
+        {
+            let session = Session::new(&mut db).unwrap();
+            session
+                .assert(
+                    &name,
+                    &AttributeName::from_static(":attr/unique"),
+                    &Value::Integer(1),
+                )
+                .unwrap();
+            session.commit().unwrap();
+        }
+
+        {
+            let session = Session::new(&mut db).unwrap();
+            let res = session.assert(&bob2, &name, &bob_name);
+            assert_eq!(res, Err(Error::NotUniqueForAttribute));
+        }
+
+        /* retract and try again */
+        {
+            let session = Session::new(&mut db).unwrap();
+            session
+                .retract(
+                    &name,
+                    &AttributeName::from_static(":attr/unique"),
+                    &Value::Integer(1),
+                )
+                .unwrap();
+            session.commit().unwrap();
+        }
+
+        {
+            let session = Session::new(&mut db).unwrap();
+            session.assert(&bob2, &name, &bob_name).unwrap();
+            session.commit().unwrap();
+        }
     }
 
     #[test]

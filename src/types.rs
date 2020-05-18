@@ -127,6 +127,12 @@ impl RowIdOr<EntityId> for EntityId {
     }
 }
 
+impl RowIdOr<EntityId> for Attribute<'_> {
+    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
+        either::Right(&self.entity.id)
+    }
+}
+
 impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
     fn row_id_or(&self) -> either::Either<i64, &AttributeName<'a>> {
         either::Right(self)
@@ -281,6 +287,7 @@ pub enum Value {
     Integer(i64),
     Real(f64),
     // Instant(chrono::DateTime<chrono::Utc>),
+    // Bool(bool), ???
     Text(String),
     Blob(Vec<u8>),
 }

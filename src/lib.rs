@@ -121,6 +121,33 @@ pub enum Error {
     Sql(#[from] rusqlite::Error),
 }
 
+impl Error {
+    fn promote_rusqlite(e: rusqlite::Error) -> Self {
+        match &e {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                    extended_code,
+                },
+                Some(msg),
+            ) => match (extended_code, msg.as_str()) {
+                (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
+                    Error::Immutable(":entity/id")
+                }
+                (
+                    &SQLITE_CONSTRAINT_UNIQUE,
+                    "UNIQUE constraint failed: datoms.a, datoms.t, datoms.v",
+                ) => Error::NotUniqueForAttribute,
+                (&SQLITE_CONSTRAINT_UNIQUE, "UNIQUE constraint failed: datoms.e, datoms.a") => {
+                    Error::NotUniqueForEntity
+                }
+                _ => e.into(),
+            },
+            _ => e.into(),
+        }
+    }
+}
+
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
@@ -410,39 +437,17 @@ impl<'db> Session<'db> {
         // );
 
         let mut stmt = self.tx.prepare(&sql)?;
-        let n = match stmt.execute(&[
+        match stmt.execute(&[
             a as &dyn rusqlite::ToSql,
             e as &dyn rusqlite::ToSql,
             a as &dyn rusqlite::ToSql,
             &t as &dyn rusqlite::ToSql,
             v,
         ]) {
-            Ok(n) => Ok(n),
-            Err(e) => match &e {
-                rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
-                        extended_code,
-                    },
-                    Some(msg),
-                ) => match (extended_code, msg.as_str()) {
-                    (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
-                        Err(Error::Immutable(":entity/id"))
-                    }
-                    (
-                        &SQLITE_CONSTRAINT_UNIQUE,
-                        "UNIQUE constraint failed: datoms.a, datoms.t, datoms.v",
-                    ) => Err(Error::NotUniqueForAttribute),
-                    (&SQLITE_CONSTRAINT_UNIQUE, "UNIQUE constraint failed: datoms.e, datoms.a") => {
-                        Err(Error::NotUniqueForEntity)
-                    }
-                    _ => Err(e.into()),
-                },
-                _ => Err(e.into()),
-            },
-        }?;
-        assert_eq!(n, 1);
-        Ok(())
+            // Ok(0) => todo!("something about an upsert?"),
+            Ok(n) => Ok(assert_eq!(n, 1)),
+            Err(e) => Err(Error::promote_rusqlite(e)),
+        }
     }
 
     /// How should this even work?
@@ -486,27 +491,9 @@ impl<'db> Session<'db> {
             &t as &dyn rusqlite::ToSql,
             v,
         ]) {
-            /* TODO reuse error handling elsewhere  */
             Ok(0) => Err(Error::NotFound),
             Ok(n) => Ok(assert_eq!(n, 1)),
-            Err(e) => match &e {
-                rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ffi::ErrorCode::ConstraintViolation,
-                        extended_code,
-                    },
-                    Some(msg),
-                ) => match (extended_code, msg.as_str()) {
-                    (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
-                        Err(Error::Immutable(":entity/id"))
-                    }
-                    (&SQLITE_CONSTRAINT_UNIQUE, msg) if msg.starts_with("UNIQUE") => {
-                        Err(Error::NotUniqueForEntity)
-                    }
-                    _ => Err(e.into()),
-                },
-                _ => Err(e.into()),
-            },
+            Err(e) => Err(Error::promote_rusqlite(e)),
         }
     }
 

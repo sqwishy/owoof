@@ -80,6 +80,7 @@ use std::{
 // use rusqlite::types::Value as SqlValue;
 
 use anyhow::Context;
+use uuid::Uuid;
 
 use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
 pub use matter::{Ordering, Pattern, Projection, Selection, VariableOr};
@@ -95,6 +96,8 @@ pub(crate) const ENTITY_UUID_ROWID: i64 = -1;
 /// Hard coded entity row ID for attribute of the identifier "attr/ident" ...
 /// This is referenced _literally_ in the "attributes" database view.
 pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
+/// Hard coded entity row ID for attribute of the identifier "attr/unique" ...
+pub(crate) const ATTR_UNIQUE_ROWID: i64 = -3;
 
 pub(crate) const T_ENTITY: i64 = -1;
 /// This is referenced _literally_ in the "attributes" database view.
@@ -106,8 +109,10 @@ const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum Error {
-    #[error("value must be unique the entity")]
+    #[error("attribute must be unique for the entity")]
     NotUniqueForEntity,
+    #[error("value must be unique for the attribute")]
+    NotUniqueForAttribute,
     #[error("{0} is immutable")]
     Immutable(&'static str),
     #[error("could not retract what doesn't exist")]
@@ -133,18 +138,33 @@ impl<'db> Session<'db> {
     /// Views are attached to the lifetime of the connection, not the transaction ...
     /// ... so guard with IF NOT EXISTS.
     fn setup_views(db: &mut rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        /* attributes view */
         db.execute(
             &format!(
-                "CREATE TEMPORARY VIEW IF NOT EXISTS attributes (rowid, ident)
+                "CREATE TEMPORARY VIEW IF NOT EXISTS
+                    attributes (rowid, ident)
                  AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
                 ATTR_IDENT_ROWID, T_ATTRIBUTE,
             ),
             rusqlite::NO_PARAMS,
         )?;
 
+        /* attr_unique view */
         db.execute(
             &format!(
-                "CREATE TRIGGER
+                "CREATE TEMPORARY VIEW IF NOT EXISTS
+                    attr_unique (rowid, v)
+                 AS SELECT e, v FROM datoms WHERE a = {}",
+                ATTR_UNIQUE_ROWID,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+
+        /* :entity/id datoms */
+
+        db.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
                   IF NOT EXISTS create_entity_uuid_datoms
                 AFTER INSERT ON entities
                    FOR EACH ROW
@@ -161,13 +181,13 @@ impl<'db> Session<'db> {
                 "CREATE TEMPORARY TRIGGER
                   IF NOT EXISTS accurate_entity_uuid_datoms
                 BEFORE INSERT ON datoms
-                    FOR EACH ROW WHEN new.a = {entity_uuid}
-                                  AND new.t = {t_entity}
+                    FOR EACH ROW WHEN new.a = {ENTITY_UUID_ROWID}
+                                  AND new.t = {T_ENTITY}
                                   AND new.e != new.v
                 BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
                 END",
-                entity_uuid = ENTITY_UUID_ROWID,
-                t_entity = T_ENTITY,
+                ENTITY_UUID_ROWID = ENTITY_UUID_ROWID,
+                T_ENTITY = T_ENTITY,
             ),
             rusqlite::NO_PARAMS,
         )?;
@@ -177,10 +197,61 @@ impl<'db> Session<'db> {
                 "CREATE TEMPORARY TRIGGER
                   IF NOT EXISTS immutable_entity_uuid_datoms
                 BEFORE UPDATE ON entities
-                    FOR EACH ROW WHEN a = {entity_uuid}
+                    FOR EACH ROW WHEN new.a = {ENTITY_UUID_ROWID}
                 BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
                 END",
-                entity_uuid = ENTITY_UUID_ROWID,
+                ENTITY_UUID_ROWID = ENTITY_UUID_ROWID,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+
+        /* unique_for_attribute */
+
+        db.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
+                  IF NOT EXISTS denormalize_ins_unique_for_attribute
+                BEFORE INSERT ON datoms
+                    FOR EACH ROW WHEN new.a = {ATTR_UNIQUE_ROWID}
+                BEGIN
+                    UPDATE datoms
+                       SET unique_for_attribute = new.v
+                     WHERE datoms.a = new.e;
+                END",
+                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+
+        db.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
+                  IF NOT EXISTS denormalize_upd_unique_for_attribute
+                BEFORE UPDATE ON datoms
+                    FOR EACH ROW WHEN new.a = {ATTR_UNIQUE_ROWID}
+                                  AND new.v != old.v
+                BEGIN
+                    UPDATE datoms
+                       SET unique_for_attribute = new.v
+                     WHERE datoms.a = new.e;
+                END",
+                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
+            ),
+            rusqlite::NO_PARAMS,
+        )?;
+
+        db.execute(
+            &format!(
+                "CREATE TEMPORARY TRIGGER
+                  IF NOT EXISTS denormalize_del_unique_for_attribute
+                BEFORE DELETE ON datoms
+                    FOR EACH ROW WHEN old.a = {ATTR_UNIQUE_ROWID}
+                BEGIN
+                    UPDATE datoms
+                       SET unique_for_attribute = false
+                     WHERE datoms.a = old.e;
+                END",
+                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
             ),
             rusqlite::NO_PARAMS,
         )?;
@@ -189,6 +260,8 @@ impl<'db> Session<'db> {
     }
 
     pub fn init_schema(db: &'db mut rusqlite::Connection) -> rusqlite::Result<()> {
+        use rusqlite::params;
+
         let mut tx = db.transaction()?;
         tx.execute_batch(SCHEMA)?;
 
@@ -198,34 +271,24 @@ impl<'db> Session<'db> {
         // own UUIDs (unless we just use random 128 bit blobs ...) and I'm avoiding database
         // functions for now.
 
-        // entity/uuid & attr/ident
-        tx.execute(
-            "INSERT INTO entities (rowid, uuid) VALUES (?, ?), (?, ?)",
-            rusqlite::params![
-                ENTITY_UUID_ROWID,
-                uuid::Uuid::new_v4(),
-                ATTR_IDENT_ROWID,
-                uuid::Uuid::new_v4(),
-            ],
-        )
-        .map(|n| assert_eq!(n, 2))?;
+        for (ent_rowid, ident) in &[
+            (ENTITY_UUID_ROWID, "entity/uuid"),
+            (ATTR_IDENT_ROWID, "attr/ident"),
+            (ATTR_UNIQUE_ROWID, "attr/unique"),
+        ] {
+            let p = params![ent_rowid, Uuid::new_v4()];
+            tx.execute("INSERT INTO entities (rowid, uuid) VALUES (?, ?)", p)
+                .map(|n| assert_eq!(n, 1))?;
 
-        tx.execute(
-            "INSERT INTO datoms (e, a, t, v)
-                  VALUES (?, ?, ?, ?)
-                       , (?, ?, ?, ?)",
-            rusqlite::params![
-                ENTITY_UUID_ROWID, // the entity/uuid attribute's rowid
-                ATTR_IDENT_ROWID,  // has a attr/ident attribue
-                T_ATTRIBUTE,       //
-                "entity/uuid",     // of this string
-                ATTR_IDENT_ROWID,
-                ATTR_IDENT_ROWID,
-                T_ATTRIBUTE,
-                "attr/ident",
-            ],
-        )
-        .map(|n| assert_eq!(n, 2))?;
+            let p = params![ent_rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, ident];
+            tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
+                .map(|n| assert_eq!(n, 1))?;
+        }
+
+        // (ATTR_IDENT_ROWID, ATTR_UNIQUE_ROWID, true);
+        let p = params![ATTR_IDENT_ROWID, ATTR_UNIQUE_ROWID, 0, true];
+        tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
+            .map(|n| assert_eq!(n, 1))?;
 
         tx.commit()?;
 
@@ -264,7 +327,7 @@ impl<'db> Session<'db> {
             .transpose()
     }
 
-    pub fn new_attribute<'a, S>(&self, ident: S) -> rusqlite::Result<Attribute<'a>>
+    pub fn new_attribute<'a, S>(&self, ident: S) -> Result<Attribute<'a>>
     where
         S: Into<AttributeName<'a>>,
     {
@@ -272,11 +335,8 @@ impl<'db> Session<'db> {
 
         let entity = self.new_entity()?;
 
-        let n = self.tx.execute(
-            "INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)",
-            rusqlite::params![entity.rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, &ident],
-        )?;
-        assert_eq!(n, 1);
+        use types::RowId;
+        self.assert(&entity, &RowId(ATTR_IDENT_ROWID), &ident)?;
 
         Ok(Attribute { entity, ident })
     }
@@ -327,11 +387,13 @@ impl<'db> Session<'db> {
 
         let sql = format!(
             r#"
-        INSERT INTO datoms (e, a, t, v)
+        WITH yooneek AS (SELECT v FROM attr_unique WHERE rowid = {a} LIMIT 1)
+        INSERT INTO datoms (e, a, t, v, unique_for_attribute)
              VALUES ( {e}
                     , {a}
                     , ?
-                    , {v} )"#,
+                    , {v}
+                    , ifnull((SELECT v FROM yooneek), false) )"#,
             e = e_bind_str,
             a = a_bind_str,
             v = v_bind_str,
@@ -339,15 +401,17 @@ impl<'db> Session<'db> {
         // eprintln!("[DEBUG] sql: ...");
         // eprintln!("{}", sql);
         // eprintln!(
-        //     "[DEBUG] par: {:?} {:?} {:?} {:?}",
+        //     "[DEBUG] par: {:?} {:?} {:?} {:?} {:?}",
+        //     a.to_sql(),
         //     e.to_sql(),
         //     a.to_sql(),
         //     t,
-        //     v
+        //     v,
         // );
 
         let mut stmt = self.tx.prepare(&sql)?;
         let n = match stmt.execute(&[
+            a as &dyn rusqlite::ToSql,
             e as &dyn rusqlite::ToSql,
             a as &dyn rusqlite::ToSql,
             &t as &dyn rusqlite::ToSql,
@@ -365,7 +429,11 @@ impl<'db> Session<'db> {
                     (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
                         Err(Error::Immutable(":entity/id"))
                     }
-                    (&SQLITE_CONSTRAINT_UNIQUE, msg) if msg.starts_with("UNIQUE") => {
+                    (
+                        &SQLITE_CONSTRAINT_UNIQUE,
+                        "UNIQUE constraint failed: datoms.a, datoms.t, datoms.v",
+                    ) => Err(Error::NotUniqueForAttribute),
+                    (&SQLITE_CONSTRAINT_UNIQUE, "UNIQUE constraint failed: datoms.e, datoms.a") => {
                         Err(Error::NotUniqueForEntity)
                     }
                     _ => Err(e.into()),
@@ -418,6 +486,7 @@ impl<'db> Session<'db> {
             &t as &dyn rusqlite::ToSql,
             v,
         ]) {
+            /* TODO reuse error handling elsewhere  */
             Ok(0) => Err(Error::NotFound),
             Ok(n) => Ok(assert_eq!(n, 1)),
             Err(e) => match &e {
@@ -712,6 +781,19 @@ mod tests {
     }
 
     #[test]
+    fn unique_for_attribute() -> Result<()> {
+        let mut db = blank_db()?;
+        let session = Session::new(&mut db)?;
+        session.new_attribute(":person/name")?;
+        assert_eq!(
+            session.new_attribute(":person/name"),
+            Err(Error::NotUniqueForAttribute)
+        );
+        session.commit()?;
+        Ok(())
+    }
+
+    #[test]
     fn upsert_maybe_i_guess() -> Result<()> {
         let mut db = blank_db()?;
 
@@ -728,36 +810,34 @@ mod tests {
     }
 
     #[test]
-    fn retract() -> Result<()> {
-        let mut db = blank_db()?;
+    fn retract() {
+        let mut db = blank_db().unwrap();
 
-        let session = Session::new(&mut db)?;
+        let session = Session::new(&mut db).unwrap();
 
-        let name = session.new_attribute(":person/name")?;
-        let bob = session.new_entity()?;
+        let name = session.new_attribute(":person/name").unwrap();
+        let bob = session.new_entity().unwrap();
         let bobs_name = Value::Text("bob".to_owned());
 
-        session.assert(&bob, &name, &bobs_name)?;
+        session.assert(&bob, &name, &bobs_name).unwrap();
 
         let pat = [pat!(?p ":person/name" ?n)];
         let mut prj = Projection::<Value>::from_patterns(&pat);
         let sel = prj.select((prj.var("p").unwrap(), prj.var("n").unwrap()));
 
         assert_eq!(
-            session.find(&sel)?,
+            session.find(&sel).unwrap(),
             vec![(Value::Entity(bob.id), bobs_name.clone())],
         );
 
-        session.retract(&bob, &name, &bobs_name)?;
+        session.retract(&bob, &name, &bobs_name).unwrap();
 
-        assert_eq!(session.find(&sel)?, vec![]);
+        assert_eq!(session.find(&sel).unwrap(), vec![]);
 
         assert_eq!(
             Err(Error::NotFound),
             session.retract(&bob, &name, &bobs_name)
         );
-
-        Ok(())
     }
 
     #[test]

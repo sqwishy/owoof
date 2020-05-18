@@ -111,6 +111,16 @@ pub trait RowIdOr<T> {
     fn row_id_or(&self) -> either::Either<i64, &T>;
 }
 
+/// TODO
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct RowId(pub i64);
+
+impl<T> RowIdOr<T> for RowId {
+    fn row_id_or(&self) -> either::Either<i64, &T> {
+        either::Left(self.0)
+    }
+}
+
 impl RowIdOr<EntityId> for EntityId {
     fn row_id_or(&self) -> either::Either<i64, &EntityId> {
         either::Right(self)

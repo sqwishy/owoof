@@ -25,13 +25,21 @@ create table "datoms"
     , t     integer not null
     , v     blob    not null
     -- , is_indexed boolean not null default false
-    -- , is_unique  boolean not null default false
+
+    -- denormalized based on :attr/unique on this datom's attribute
+    -- This means that this datom's value is unique across all datoms with this
+    -- attribute.
+    -- The :attr/ident attribute datom is an example of an attribute that uses this so
+    -- that all attribute identifiers are unique.
+    , unique_for_attribute  boolean  not null  default false
+
     -- , tx    integer not null -- references "db/transactions" (id)
     );
 
 -- thinkingface.jpg
--- TODO some attributes must be unique for the database ...? like :attr/ident?
 create unique index "datoms_ea"  on "datoms" (e, a);
+
+create unique index "datoms_av"  on "datoms" (a, t, v) where "datoms"."unique_for_attribute";
 
 create        index "datoms_eav" on "datoms" (e, a, t, v);
 create        index "datoms_aev" on "datoms" (a, e, t, v);

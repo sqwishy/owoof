@@ -561,7 +561,6 @@ where
         self.iter().map(|t| t.read_from_row(c)).collect()
     }
 }
-
 macro_rules! read_tuple_from_row {
     ( $( $t:ident )+ ) => {
         impl<$($t: ReadFromRow),+> ReadFromRow for ($($t,)+)
@@ -587,3 +586,37 @@ read_tuple_from_row!(A B C D E F);
 read_tuple_from_row!(A B C D E F G);
 read_tuple_from_row!(A B C D E F G H);
 read_tuple_from_row!(A B C D E F G H I);
+
+/* ??????????? */
+
+#[derive(Debug)]
+pub struct CrazyFuckingMemes<T, F>(T, F);
+
+impl<T, F> CrazyFuckingMemes<T, F> {
+    pub(crate) fn new(t: T, f: F) -> Self {
+        CrazyFuckingMemes(t, f)
+    }
+}
+
+impl<T, F> ReadFromRow for CrazyFuckingMemes<T, F>
+where
+    F: ReadFromRow,
+{
+    type Out = <F as ReadFromRow>::Out;
+
+    fn read_from_row(&self, c: &mut RowCursor) -> rusqlite::Result<Self::Out> {
+        self.1.read_from_row(c)
+    }
+}
+
+impl<'a, P, T, Ph> AddToQuery<P> for CrazyFuckingMemes<T, Ph>
+where
+    T: AddToQuery<P>,
+{
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: QueryWriter<P>,
+    {
+        self.0.add_to_query(query)
+    }
+}

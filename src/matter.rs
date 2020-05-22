@@ -567,6 +567,18 @@ impl<'a, 'p, V, S> Selection<'a, 'p, V, S> {
         self.order_by.push(ord);
         self
     }
+
+    pub fn read_using<SS>(
+        self,
+        from_row: SS,
+    ) -> Selection<'a, 'p, V, crate::sql::CrazyFuckingMemes<S, SS>> {
+        Selection {
+            projection: self.projection,
+            columns: crate::sql::CrazyFuckingMemes::new(self.columns, from_row),
+            order_by: self.order_by,
+            limit: self.limit,
+        }
+    }
 }
 
 impl<'a, 'p, V, S> Deref for Selection<'a, 'p, V, S> {

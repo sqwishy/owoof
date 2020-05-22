@@ -160,6 +160,8 @@ impl<'a> Command<'a> {
                     }
                 }
 
+                assert!(selection.len() > 0);
+
                 let mut sel = p.select(selection.as_slice());
 
                 // todo use the function chain call whatever thing
@@ -173,8 +175,15 @@ impl<'a> Command<'a> {
 
                 sel.limit(limit);
 
-                let results = sess.find(&sel).context("find")?;
-                let jaysons = serde_json::to_string_pretty(&results)?;
+                let jaysons = if selection.len() == 1 {
+                    let sel = sel.read_using(&selection[0]);
+                    let results = sess.find(&sel).context("find")?;
+                    serde_json::to_string_pretty(&results)
+                } else {
+                    let results = sess.find(&sel).context("find")?;
+                    serde_json::to_string_pretty(&results)
+                }?;
+
                 let end = std::time::Instant::now();
                 println!("{}", jaysons);
 

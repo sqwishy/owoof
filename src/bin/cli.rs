@@ -11,7 +11,7 @@ enum ArgError<'a> {
     Unknown(&'a str),
     #[error("expected value for {}", .0)]
     NeedsValue(&'a str),
-    #[error("invaid value for {}: {}", .0, .1)]
+    #[error("invalid value for {}: {}", .0, .1)]
     Invalid(&'a str, anyhow::Error),
 }
 
@@ -164,14 +164,22 @@ impl<'a> Command<'a> {
 
                 let mut sel = p.select(selection.as_slice());
 
-                // todo use the function chain call whatever thing
-                order.iter().for_each(|(var, attrs, ord)| {
-                    sel.attribute_map(var, attrs)
-                        .into_value_locations()
-                        .for_each(|loc| {
+                order.iter().try_for_each(|(var, attrs, ord)| {
+                    if attrs.is_empty() {
+                        if let Some(loc) = sel.var(var) {
                             sel.order_by((loc, *ord));
-                        })
-                });
+                        } else {
+                            return Err(anyhow::format_err!("unknown variable: {}", var));
+                        }
+                    } else {
+                        sel.attribute_map(var, attrs)
+                            .into_value_locations()
+                            .for_each(|loc| {
+                                sel.order_by((loc, *ord));
+                            })
+                    }
+                    Ok(())
+                })?;
 
                 sel.limit(limit);
 

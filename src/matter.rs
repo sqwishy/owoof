@@ -324,28 +324,28 @@ where
     /// If we say that x is at 0.v, we include search constraints that equal 0.v, but we don't
     /// recurse and search for things equal to those. That _should_ be fine based on the way that
     /// [constrain_variable()] works?
-    pub fn variable_locations(&self, n: &str) -> impl Iterator<Item = &Location> {
+    pub fn variable_locations(&self, n: &str) -> impl Iterator<Item = Location> + '_ {
         self.variables
             .get(n)
             .into_iter()
-            .map(move |first| {
-                Some(first)
-                    .into_iter()
-                    .chain(self.constraints().iter().filter_map(move |c| match c {
-                        Constraint {
-                            lh,
-                            op: ConstraintOp::Eq,
-                            rh: Concept::Location(rh),
-                        } if lh == first => Some(rh),
-                        Constraint {
-                            lh,
-                            op: ConstraintOp::Eq,
-                            rh: Concept::Location(rh),
-                        } if rh == first => Some(lh),
-                        _ => None,
-                    }))
-            })
+            .map(move |&first| Some(first).into_iter().chain(self.constrained_to(first)))
             .flatten()
+    }
+
+    pub fn constrained_to(&self, loc: Location) -> impl Iterator<Item = Location> + '_ {
+        self.constraints().iter().filter_map(move |c| match c {
+            Constraint {
+                lh,
+                op: ConstraintOp::Eq,
+                rh: Concept::Location(rh),
+            } if lh == &loc => Some(*rh),
+            Constraint {
+                lh,
+                op: ConstraintOp::Eq,
+                rh: Concept::Location(rh),
+            } if rh == &loc => Some(*lh),
+            _ => None,
+        })
     }
 
     fn add_datomset(&mut self) -> DatomSet {

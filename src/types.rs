@@ -1,5 +1,6 @@
 use std::{
     borrow::{Borrow, Cow},
+    collections::HashMap,
     convert::TryFrom,
     ops::Deref,
 };
@@ -7,6 +8,8 @@ use std::{
 use anyhow::Context;
 
 use crate::{sql, T_ATTRIBUTE, T_ENTITY};
+
+pub static ENTITY_UUID: AttributeName = AttributeName(Cow::Borrowed(":entity/uuid"));
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
@@ -44,7 +47,7 @@ pub struct AttributeName<'a>(
 
 impl<'a> AttributeName<'a> {
     pub fn from_static(s: &'static str) -> Self {
-        AttributeName::try_from(Cow::from(s)).unwrap()
+        AttributeName::try_from(Cow::Borrowed(s)).unwrap()
     }
 }
 
@@ -414,6 +417,13 @@ where
 {
     deserialize_with_attribute_prefix(deserializer).map(Cow::from)
 }
+
+// #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+// #[serde(untagged)]
+// pub enum ???Value {
+//     Map(HashMap<String, Value>),
+//     Scalar(Value),
+// }
 
 // #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 // struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);

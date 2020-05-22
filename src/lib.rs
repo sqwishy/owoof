@@ -64,10 +64,10 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::needless_return)]
 
-mod explain;
-mod matter;
-mod sql;
-mod types;
+pub mod explain;
+pub mod matter;
+pub mod sql;
+pub mod types;
 
 use std::collections::HashMap;
 use std::{
@@ -83,7 +83,7 @@ use anyhow::Context;
 use uuid::Uuid;
 
 use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
-pub use matter::{Ordering, Pattern, Projection, Selection, VariableOr};
+pub use matter::{AttributeMap, Location, Ordering, Pattern, Projection, Selection, VariableOr};
 pub use types::{
     Affinity, Assertable, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, RowIdOr,
     Value,

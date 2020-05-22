@@ -293,7 +293,7 @@ where
             query.push_str("     , datoms ")
         }
         // write the alias
-        write!(query, "_dtm{}\n", n)?;
+        write!(query, "datoms{}\n", n)?;
     }
 
     for (n, constraint) in projection.constraints().iter().enumerate() {
@@ -353,19 +353,19 @@ pub fn location(l: &matter::Location) -> String {
 }
 
 pub fn datomset_e(datomset: DatomSet) -> String {
-    format!("_dtm{}.e", datomset.0)
+    format!("datoms{}.e", datomset.0)
 }
 
 pub fn datomset_a(datomset: DatomSet) -> String {
-    format!("_dtm{}.a", datomset.0)
+    format!("datoms{}.a", datomset.0)
 }
 
 pub fn datomset_t(datomset: DatomSet) -> String {
-    format!("_dtm{}.t", datomset.0)
+    format!("datoms{}.t", datomset.0)
 }
 
 pub fn datomset_v(datomset: DatomSet) -> String {
-    format!("_dtm{}.v", datomset.0)
+    format!("datoms{}.v", datomset.0)
 }
 
 /// TODO XXX FIXME the V and S types are supposed to be related somehow?
@@ -383,6 +383,7 @@ where
 
     let mut select_writer = query.with_indent(once("SELECT ").chain(repeat("     , ")));
     s.columns.add_to_query(&mut select_writer);
+    query.nl();
 
     projection_sql(s.projection, query)?;
 
@@ -426,9 +427,7 @@ pub fn limit_sql<'a>(limit: &'a i64, query: &mut GenericQuery<&'a dyn ToSqlDebug
 
 pub(crate) fn read_value(t_col: &str, v_col: &str) -> String {
     format!(
-        "CASE {t}
-         WHEN {t_ent} THEN {rd_ent}
-         ELSE {v} END",
+        "CASE {t} WHEN {t_ent} THEN {rd_ent} ELSE {v} END",
         t = t_col,
         t_ent = crate::T_ENTITY,
         rd_ent = read_entity(v_col),

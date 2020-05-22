@@ -1,5 +1,6 @@
 //! hi
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -21,6 +22,42 @@ impl<'a> ArgError<'a> {
 }
 
 #[derive(Debug)]
+enum Show<'a> {
+    Location(oof::Location),
+    Map(oof::AttributeMap<'a, oof::Value>),
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(untagged)]
+enum Shown<'a> {
+    Value(oof::Value),
+    Map(HashMap<&'a oof::AttributeName<'a>, oof::Value>),
+}
+
+impl<'a, P> oof::sql::AddToQuery<P> for Show<'a> {
+    fn add_to_query<W>(&self, query: &mut W)
+    where
+        W: oof::sql::QueryWriter<P>,
+    {
+        match self {
+            Show::Location(i) => i.add_to_query(query),
+            Show::Map(i) => i.add_to_query(query),
+        }
+    }
+}
+
+impl<'a> oof::sql::ReadFromRow for Show<'a> {
+    type Out = Shown<'a>;
+
+    fn read_from_row(&self, c: &mut oof::sql::RowCursor) -> rusqlite::Result<Self::Out> {
+        match self {
+            Show::Location(i) => i.read_from_row(c).map(Shown::Value),
+            Show::Map(i) => i.read_from_row(c).map(Shown::Map),
+        }
+    }
+}
+
+#[derive(Debug)]
 enum Command<'a> {
     Init {
         path: PathBuf,
@@ -30,7 +67,7 @@ enum Command<'a> {
     },
     Query {
         path: PathBuf,
-        maps: Vec<(&'a str, Vec<oof::AttributeName<'a>>)>,
+        show: Vec<(&'a str, Vec<oof::AttributeName<'a>>)>,
         patterns: Vec<oof::Pattern<'a, oof::Value>>,
         order: Vec<(&'a str, Vec<oof::AttributeName<'a>>, oof::Ordering)>,
         limit: i64,
@@ -79,23 +116,11 @@ impl<'a> Command<'a> {
             }
             Command::Query {
                 path,
-                maps,
+                show,
                 patterns,
                 order,
                 limit,
             } => {
-                // let mut memes = Vec::<u8>::with_capacity(512 * 1024 * 1024);
-                // let r = unsafe {
-                //     eprintln!("{:?} {}", memes.as_mut_ptr(), memes.capacity());
-                //     rusqlite::ffi::sqlite3_config(
-                //         rusqlite::ffi::SQLITE_CONFIG_HEAP,
-                //         memes.as_mut_ptr(),
-                //         memes.capacity(),
-                //         64,
-                //     )
-                // };
-                // todo!("{}", r);
-
                 let mut conn = rusqlite::Connection::open_with_flags(
                     &path,
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -108,12 +133,34 @@ impl<'a> Command<'a> {
 
                 let mut p = oof::Projection::from_patterns(&patterns);
 
-                let mappings = maps
+                let mut selection = show
                     .iter()
-                    .map(|(var, attrs)| p.attribute_map(var, attrs))
-                    .collect::<Vec<_>>();
+                    .map(|(var, attrs)| {
+                        if attrs.is_empty() {
+                            p.var(var)
+                                .map(Show::Location)
+                                .ok_or_else(|| anyhow::format_err!("unknown variable: {}", var))
+                        } else {
+                            Ok(Show::Map(p.attribute_map(var, attrs)))
+                        }
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
 
-                let mut sel = p.select(mappings.as_slice());
+                if selection.is_empty() {
+                    // Try to find a variable that is unconstrained ...
+                    if let Some((_, loc)) = p
+                        .variables()
+                        .iter()
+                        .find(|(_, &loc)| p.constrained_to(loc).next().is_none())
+                    {
+                        selection.push(Show::Location(*loc));
+                    } else {
+                        let map = p.attribute_map("_", std::iter::once(&oof::types::ENTITY_UUID));
+                        selection.push(Show::Map(map));
+                    }
+                }
+
+                let mut sel = p.select(selection.as_slice());
 
                 // todo use the function chain call whatever thing
                 order.iter().for_each(|(var, attrs, ord)| {
@@ -190,7 +237,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
     let mut patterns = vec![];
     let mut order = vec![];
     let mut db = Option::<&str>::None;
-    let mut maps = vec![];
+    let mut show = vec![];
     let mut limit = Option::<&str>::None;
 
     let parse_db_path = |db: Option<&str>| -> Result<PathBuf, _> {
@@ -215,9 +262,9 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
             "--db" => {
                 db = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
             }
-            "--map" => {
+            "--show" => {
                 let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
-                maps.push(v);
+                show.push(v);
             }
             "--limit" => {
                 limit = Some(args.next().ok_or(ArgError::NeedsValue(arg))?);
@@ -243,14 +290,11 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
         .collect::<anyhow::Result<Vec<_>>>()
         .map_err(ArgError::invalid("<pattern>"))?;
 
-    let maps = if maps.is_empty() {
-        vec![("?_", vec![oof::AttributeName::from_static(":entity/uuid")])]
-    } else {
-        maps.into_iter()
-            .map(parse_map)
-            .collect::<anyhow::Result<Vec<_>>>()
-            .map_err(ArgError::invalid("--map"))?
-    };
+    let show = show
+        .into_iter()
+        .map(parse_show)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(ArgError::invalid("--show"))?;
 
     let limit = limit
         .map(|s| {
@@ -263,7 +307,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
     let order = order
         .into_iter()
         .map(|(ordering, ord)| {
-            parse_map(ordering)
+            parse_show(ordering)
                 .map(|(var, attrs)| (var, attrs, ord))
                 .map_err(ArgError::invalid(match ord {
                     oof::Ordering::Asc => "--asc",
@@ -274,7 +318,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
 
     return Ok(Command::Query {
         path,
-        maps,
+        show,
         limit,
         patterns,
         order,
@@ -311,7 +355,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
     }
 }
 
-fn parse_map<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<oof::AttributeName<'a>>)> {
+fn parse_show<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<oof::AttributeName<'a>>)> {
     let mut terms = s.split_ascii_whitespace().filter(|s| !s.is_empty());
     let var = match terms.next().map(parse_variable) {
         None => anyhow::bail!("variable expected, none found"),

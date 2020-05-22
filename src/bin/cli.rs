@@ -58,6 +58,13 @@ impl<'a> oof::sql::ReadFromRow for Show<'a> {
 }
 
 #[derive(Debug)]
+enum QueryMode {
+    Find,
+    Explain,
+    ExplainPlan,
+}
+
+#[derive(Debug)]
 enum Command<'a> {
     Init {
         path: PathBuf,
@@ -66,6 +73,7 @@ enum Command<'a> {
         path: PathBuf,
     },
     Query {
+        mode: QueryMode,
         path: PathBuf,
         show: Vec<(&'a str, Vec<oof::AttributeName<'a>>)>,
         patterns: Vec<oof::Pattern<'a, oof::Value>>,
@@ -115,6 +123,7 @@ impl<'a> Command<'a> {
                 }
             }
             Command::Query {
+                mode,
                 path,
                 show,
                 patterns,
@@ -183,17 +192,39 @@ impl<'a> Command<'a> {
 
                 sel.limit(limit);
 
-                let jaysons = if selection.len() == 1 {
-                    let sel = sel.read_using(&selection[0]);
-                    let results = sess.find(&sel).context("find")?;
-                    serde_json::to_string_pretty(&results)
-                } else {
-                    let results = sess.find(&sel).context("find")?;
-                    serde_json::to_string_pretty(&results)
-                }?;
+                let output = match mode {
+                    QueryMode::Find => {
+                        if selection.len() == 1 {
+                            let sel = sel.read_using(&selection[0]);
+                            let results = sess.find(&sel).context("find")?;
+                            serde_json::to_string_pretty(&results)
+                        } else {
+                            let results = sess.find(&sel).context("find")?;
+                            serde_json::to_string_pretty(&results)
+                        }?
+                    }
+
+                    QueryMode::Explain => if selection.len() == 1 {
+                        let sel = sel.read_using(&selection[0]);
+                        sess.explain(&sel)
+                    } else {
+                        sess.explain(&sel)
+                    }
+                    .context("explain")?
+                    .to_string(),
+
+                    QueryMode::ExplainPlan => if selection.len() == 1 {
+                        let sel = sel.read_using(&selection[0]);
+                        sess.explain_plan(&sel)
+                    } else {
+                        sess.explain_plan(&sel)
+                    }
+                    .context("explain plan")?
+                    .to_string(),
+                };
 
                 let end = std::time::Instant::now();
-                println!("{}", jaysons);
+                println!("{}", output);
 
                 eprintln!("[DEBUG] duration: {:?}", end - start);
 
@@ -214,13 +245,13 @@ fn main() {
         Err(e) => {
             eprintln!("{}\n", e);
             eprintln!(
-                "usage: {} [--db <path>] [<pattern>...] [--map <map>] [--limit <num>] [--asc <map>] [--desc <map>]",
+                "usage: {} [--db <path>] [<pattern>...] [--show <show>] [--limit <num>] [--asc <show>] [--desc <show>] [--find|--explain|--explain-plan]",
                 prog
             );
             eprintln!("       {} [--db <path>] assert", prog);
             eprintln!("       {} [--db <path>] init", prog);
             eprintln!("<pattern> is ...TODO");
-            eprintln!("<map>     is ?var :some/attribute [:some/attribute...]");
+            eprintln!("<show>    is ?var [:some/attribute...]");
             std::process::exit(1);
         }
         Ok(cmd) => {
@@ -256,6 +287,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
     let mut db = Option::<&str>::None;
     let mut show = vec![];
     let mut limit = Option::<&str>::None;
+    let mut mode = QueryMode::Find;
 
     let parse_db_path = |db: Option<&str>| -> Result<PathBuf, _> {
         db.map(|s| {
@@ -294,6 +326,9 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
                 let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
                 order.push((v, oof::Ordering::Desc));
             }
+            "--find" => mode = QueryMode::Find,
+            "--explain" => mode = QueryMode::Explain,
+            "--explain-plan" => mode = QueryMode::ExplainPlan,
             _ if arg.starts_with("-") => return Err(ArgError::Unknown(arg)),
             _ => patterns.push(arg),
         }
@@ -334,6 +369,7 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
         .collect::<Result<Vec<_>, _>>()?;
 
     return Ok(Command::Query {
+        mode,
         path,
         show,
         limit,
@@ -349,6 +385,10 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
             let entity = parse_variable(e)
                 .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
                 .or_else(|_| {
+                    /* TODO this is fairly confusing, entity references are plain UUIDs in the
+                     * entity part of the pattern but they are JSON strings with a leading # in the
+                     * value field of the pattern. Maybe always require the leading # or whatever
+                     * symbol? somewhat consistent with :attributes and ?variables */
                     e.parse::<uuid::Uuid>()
                         .map(oof::EntityId::from)
                         .map(oof::VariableOr::Value)

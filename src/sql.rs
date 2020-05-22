@@ -6,6 +6,7 @@ use std::ops::{Deref, DerefMut};
 use rusqlite::types::ToSql;
 
 use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
+use crate::types::Assertable;
 
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
@@ -280,7 +281,7 @@ pub fn projection_sql<'q, 'a: 'q, V>(
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
-    V: Debug + ToSql,
+    V: Debug + ToSql + Assertable,
 {
     assert!(projection.datomsets() > 0);
 
@@ -328,9 +329,15 @@ where
                 query.push_str(bind_attribute());
                 query.add_param(handle as &dyn ToSqlDebug);
             }
-            Concept::Value(v) => {
-                query.push_str("?");
+            Concept::Value(affinity, v) => {
+                let (a, v_bind) = affinity.t_and_bind();
+                query.push_str(v_bind);
                 query.add_param(v);
+                /* constrain affinity/t */
+                query.push_str("\n   AND ");
+                query.push_str(&datomset_t(lh.datomset));
+                query.push_str(" = ?");
+                query.add_param(a);
             }
         }
 
@@ -376,7 +383,7 @@ pub fn selection_sql<'q, 'a: 'q, 'p, V, S>(
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
-    V: ToSqlDebug,
+    V: ToSqlDebug + Assertable,
     S: AddToQuery<&'a dyn ToSqlDebug>,
 {
     use std::iter::{once, repeat};

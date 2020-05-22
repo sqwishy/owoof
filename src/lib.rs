@@ -410,7 +410,8 @@ impl<'db> Session<'db> {
             either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
         };
 
-        let (t, v_bind_str) = v.affinity().t_and_bind();
+        let v_affinity = v.affinity();
+        let (t, v_bind_str) = v_affinity.t_and_bind();
 
         let sql = format!(
             r#"
@@ -441,7 +442,7 @@ impl<'db> Session<'db> {
             a as &dyn rusqlite::ToSql,
             e as &dyn rusqlite::ToSql,
             a as &dyn rusqlite::ToSql,
-            &t as &dyn rusqlite::ToSql,
+            t as &dyn rusqlite::ToSql,
             v,
         ]) {
             // Ok(0) => todo!("something about an upsert?"),
@@ -470,7 +471,8 @@ impl<'db> Session<'db> {
             either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
         };
 
-        let (t, v_bind_str) = v.affinity().t_and_bind();
+        let v_affinity = v.affinity();
+        let (t, v_bind_str) = v_affinity.t_and_bind();
 
         let sql = format!(
             r#"
@@ -488,7 +490,7 @@ impl<'db> Session<'db> {
         match stmt.execute(&[
             e as &dyn rusqlite::ToSql,
             a as &dyn rusqlite::ToSql,
-            &t as &dyn rusqlite::ToSql,
+            t as &dyn rusqlite::ToSql,
             v,
         ]) {
             Ok(0) => Err(Error::NotFound),

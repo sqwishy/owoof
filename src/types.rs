@@ -192,11 +192,11 @@ pub enum Affinity {
 }
 
 impl Affinity {
-    pub(crate) fn t_and_bind(&self) -> (i64, &'static str) {
+    pub(crate) fn t_and_bind(&self) -> (&i64, &'static str) {
         match self {
-            Affinity::Entity => (T_ENTITY, sql::bind_entity()),
-            Affinity::Attribute => (T_ATTRIBUTE, "?"),
-            Affinity::Other(t) => (*t, "?"),
+            Affinity::Entity => (&T_ENTITY, sql::bind_entity()),
+            Affinity::Attribute => (&T_ATTRIBUTE, "?"),
+            Affinity::Other(t) => (t, "?"),
         }
     }
 }

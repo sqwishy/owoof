@@ -1,7 +1,10 @@
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, iter};
 
-use crate::{AttributeName, EntityId};
+use crate::{
+    types::{Affinity, Assertable},
+    AttributeName, EntityId,
+};
 
 const ANONYMOUS: &str = "";
 
@@ -208,7 +211,7 @@ pub enum Concept<'a, V> {
     Location(Location),
     Entity(&'a EntityId),
     Attribute(&'a AttributeName<'a>),
-    Value(&'a V),
+    Value(Affinity, &'a V),
 }
 
 impl<'a, V> Constraint<'a, V> {
@@ -284,7 +287,7 @@ impl<'a, V> Default for Projection<'a, V> {
 
 impl<'a, V> Projection<'a, V>
 where
-    V: Debug,
+    V: Debug + Assertable,
 {
     pub fn from_patterns(patterns: &'a [Pattern<V>]) -> Self {
         let mut p = Self::default();
@@ -410,7 +413,9 @@ where
         // ... and the value
         match value {
             VariableOr::Variable(v) => self.constrain_variable(v, value_field),
-            VariableOr::Value(v) => self.constrain_field(value_field, Concept::Value(v)),
+            VariableOr::Value(v) => {
+                self.constrain_field(value_field, Concept::Value(v.affinity(), v))
+            }
         };
         datomset
     }
@@ -469,7 +474,7 @@ pub struct EntityGroup<'a, 'p, V> {
 
 impl<'a, 'p, V> EntityGroup<'a, 'p, V>
 where
-    V: Debug,
+    V: Debug + Assertable,
 {
     pub fn get_or_fetch_attribute<'t: 'p>(&mut self, attr: &'t AttributeName<'t>) -> DatomSet {
         let p = &mut self.projection;

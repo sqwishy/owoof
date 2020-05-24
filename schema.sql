@@ -23,8 +23,8 @@ create table "datoms"
     ( e     integer not null references entities(rowid)
     , a     integer not null references entities(rowid)
     , t     integer not null
-    , v     blob    not null
-    -- , is_indexed boolean not null default false
+    -- Should this be nullable?
+    , v     blob
 
     -- denormalized based on :attr/unique on this datom's attribute
     -- This means that this datom's value is unique across all datoms with this
@@ -43,4 +43,6 @@ create unique index "datoms_av"  on "datoms" (a, t, v) where "datoms"."unique_fo
 
 create        index "datoms_eav" on "datoms" (e, a, t, v);
 create        index "datoms_aev" on "datoms" (a, e, t, v);
-create        index "datoms_ave" on "datoms" (a, t, v, e);-- where "datoms"."is_indexed";
+create        index "datoms_ave" on "datoms" (a, t, v, e); -- where "datoms"."is_indexed";
+create        index "datoms_vae" on "datoms" (t, v, a, e); -- todo drop t for better index?
+

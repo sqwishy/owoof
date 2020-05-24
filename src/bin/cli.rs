@@ -252,6 +252,10 @@ fn main() {
             eprintln!("       {} [--db <path>] init", prog);
             eprintln!("<pattern> is ...TODO");
             eprintln!("<show>    is ?var [:some/attribute...]");
+            eprintln!(
+                "the default path (set by OOF_DB) is {}",
+                default_db_path().display()
+            );
             std::process::exit(1);
         }
         Ok(cmd) => {

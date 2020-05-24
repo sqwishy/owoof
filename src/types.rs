@@ -49,6 +49,10 @@ impl<'a> AttributeName<'a> {
     pub fn from_static(s: &'static str) -> Self {
         AttributeName::try_from(Cow::Borrowed(s)).unwrap()
     }
+
+    pub const fn from_static_unchecked(s: &'static str) -> Self {
+        AttributeName(Cow::Borrowed(s))
+    }
 }
 
 impl<'a> Deref for AttributeName<'a> {

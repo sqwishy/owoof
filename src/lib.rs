@@ -99,6 +99,9 @@ pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
 /// Hard coded entity row ID for attribute of the identifier "attr/unique" ...
 pub(crate) const ATTR_UNIQUE_ROWID: i64 = -3;
 
+pub(crate) static ENTITY_UUID: AttributeName = AttributeName::from_static_unchecked(":entity/uuid");
+pub(crate) static ATTR_UNIQUE: AttributeName = AttributeName::from_static_unchecked(":attr/unique");
+
 pub(crate) const T_ENTITY: i64 = -1;
 /// This is referenced _literally_ in the "attributes" database view.
 pub(crate) const T_ATTRIBUTE: i64 = -2;
@@ -115,6 +118,8 @@ pub enum Error {
     NotUniqueForAttribute,
     #[error("{0} is immutable")]
     Immutable(&'static str),
+    #[error("this value is protected from modification")]
+    Protected,
     #[error("could not retract what doesn't exist")]
     NotFound,
     #[error("sql error")]
@@ -203,22 +208,8 @@ impl<'db> Session<'db> {
             rusqlite::NO_PARAMS,
         )?;
 
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS accurate_entity_uuid_datoms
-                BEFORE INSERT ON datoms
-                    FOR EACH ROW WHEN new.a = {ENTITY_UUID_ROWID}
-                                  AND new.t = {T_ENTITY}
-                                  AND new.e != new.v
-                BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
-                END",
-                ENTITY_UUID_ROWID = ENTITY_UUID_ROWID,
-                T_ENTITY = T_ENTITY,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
+        /* TODO I don't know that this ever happens,
+         * we don't write queries that would do this, right? */
         db.execute(
             &format!(
                 "CREATE TEMPORARY TRIGGER
@@ -228,57 +219,6 @@ impl<'db> Session<'db> {
                 BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
                 END",
                 ENTITY_UUID_ROWID = ENTITY_UUID_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        /* unique_for_attribute */
-
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS denormalize_ins_unique_for_attribute
-                BEFORE INSERT ON datoms
-                    FOR EACH ROW WHEN new.a = {ATTR_UNIQUE_ROWID}
-                BEGIN
-                    UPDATE datoms
-                       SET unique_for_attribute = new.v
-                     WHERE datoms.a = new.e;
-                END",
-                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS denormalize_upd_unique_for_attribute
-                BEFORE UPDATE ON datoms
-                    FOR EACH ROW WHEN new.a = {ATTR_UNIQUE_ROWID}
-                                  AND new.v != old.v
-                BEGIN
-                    UPDATE datoms
-                       SET unique_for_attribute = new.v
-                     WHERE datoms.a = new.e;
-                END",
-                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS denormalize_del_unique_for_attribute
-                BEFORE DELETE ON datoms
-                    FOR EACH ROW WHEN old.a = {ATTR_UNIQUE_ROWID}
-                BEGIN
-                    UPDATE datoms
-                       SET unique_for_attribute = false
-                     WHERE datoms.a = old.e;
-                END",
-                ATTR_UNIQUE_ROWID = ATTR_UNIQUE_ROWID,
             ),
             rusqlite::NO_PARAMS,
         )?;
@@ -312,13 +252,34 @@ impl<'db> Session<'db> {
                 .map(|n| assert_eq!(n, 1))?;
         }
 
-        // (ATTR_IDENT_ROWID, ATTR_UNIQUE_ROWID, true);
+        // assert :attr/ident :attr/unique true
         let p = params![ATTR_IDENT_ROWID, ATTR_UNIQUE_ROWID, 0, true];
         tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
             .map(|n| assert_eq!(n, 1))?;
 
+        // assert :entity/uuid :attr/unique true
+        let p = params![ENTITY_UUID_ROWID, ATTR_UNIQUE_ROWID, 0, true];
+        tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
+            .map(|n| assert_eq!(n, 1))?;
+
+        tx.execute(
+            "UPDATE datoms SET unique_for_attribute = 1 WHERE a = ? OR a = ?",
+            params![ATTR_IDENT_ROWID, ENTITY_UUID_ROWID],
+        )?;
+
         tx.commit()?;
 
+        Ok(())
+    }
+
+    /// Run PRAGMA optimize;
+    ///
+    /// https://sqlite.org/lang_analyze.html
+    pub fn optimize(&self) -> rusqlite::Result<()> {
+        let n = self
+            .tx
+            .execute("SELECT * FROM pragma_optimize()", rusqlite::NO_PARAMS)?;
+        assert_eq!(n, 1);
         Ok(())
     }
 
@@ -370,10 +331,8 @@ impl<'db> Session<'db> {
 
     // todo implement for generic Assertable ToSql thing?
     pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<Entity> {
-        let entity_uuid = AttributeName::from_static(":entity/uuid");
-
         // application-level upsert so that we can get the rowid if the entity exists
-        let entity = match obj.get(&entity_uuid) {
+        let entity = match obj.get(&ENTITY_UUID) {
             Some(Value::Entity(name)) => match self.find_entity(*name)? {
                 Some(entity) => entity,
                 None => self.new_entity_at(*name)?,
@@ -383,7 +342,7 @@ impl<'db> Session<'db> {
         };
 
         for (a, v) in obj.iter() {
-            if a == &entity_uuid {
+            if a == &ENTITY_UUID {
                 continue;
             }
             self.assert(&entity, a, v)?;
@@ -398,19 +357,45 @@ impl<'db> Session<'db> {
         A: RowIdOr<AttributeName<'z>>,
         T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
+        self.check_protected_datom(e, a)?;
+
         let e_variant = e.row_id_or();
+        let a_variant = a.row_id_or();
+        let v_affinity = v.affinity();
+
+        /* If we're setting the :attr/unique attribute on some entity,
+         * denormalize the new value to the unique_for_attribute column in datoms.
+         *
+         * This is done instead of a SQL trigger for performance reasons.
+         * It appears as if having ANY triggers on a table does some slow-path to happen.
+         * For example:
+         *
+         *       CREATE TRIGGER asdf
+         *     BEFORE INSERT ON datoms
+         *                 WHEN false
+         *                BEGIN select 0; END;
+         *
+         * ... causes population of a test database to take ~180ms from ~130ms. */
+        match a_variant.as_ref() {
+            either::Left(&rowid) if rowid == ATTR_UNIQUE_ROWID => {
+                self.set_datoms_unique_for_attribute(e, true)?;
+            }
+            either::Right(&a) if a == &ATTR_UNIQUE => {
+                self.set_datoms_unique_for_attribute(e, true)?;
+            }
+            _ => (),
+        };
+
         let (e, e_bind_str) = match e_variant.as_ref() {
             either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
             either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
         };
 
-        let a_variant = a.row_id_or();
         let (a, a_bind_str) = match a_variant.as_ref() {
             either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
             either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
         };
 
-        let v_affinity = v.affinity();
         let (t, v_bind_str) = v_affinity.t_and_bind();
 
         let sql = format!(
@@ -459,19 +444,34 @@ impl<'db> Session<'db> {
         A: RowIdOr<AttributeName<'z>>,
         T: Assertable + rusqlite::ToSql + fmt::Debug,
     {
+        self.check_protected_datom(e, a)?;
+
         let e_variant = e.row_id_or();
+        let a_variant = a.row_id_or();
+        let v_affinity = v.affinity();
+
+        /* denormalize modification of :attr/unique to datoms.unique_for_attribute
+         * (see assert() for more) */
+        match a_variant.as_ref() {
+            either::Left(&rowid) if rowid == ATTR_UNIQUE_ROWID => {
+                self.set_datoms_unique_for_attribute(e, false)?;
+            }
+            either::Right(&a) if a == &ATTR_UNIQUE => {
+                self.set_datoms_unique_for_attribute(e, false)?;
+            }
+            _ => (),
+        };
+
         let (e, e_bind_str) = match e_variant.as_ref() {
             either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
             either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
         };
 
-        let a_variant = a.row_id_or();
         let (a, a_bind_str) = match a_variant.as_ref() {
             either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
             either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
         };
 
-        let v_affinity = v.affinity();
         let (t, v_bind_str) = v_affinity.t_and_bind();
 
         let sql = format!(
@@ -495,6 +495,57 @@ impl<'db> Session<'db> {
         ]) {
             Ok(0) => Err(Error::NotFound),
             Ok(n) => Ok(assert_eq!(n, 1)),
+            Err(e) => Err(Error::promote_rusqlite(e)),
+        }
+    }
+
+    fn check_protected_datom<'z, E, A>(&self, e: &E, a: &A) -> Result<()>
+    where
+        E: RowIdOr<EntityId>,
+        A: RowIdOr<AttributeName<'z>>,
+    {
+        let e_variant = e.row_id_or();
+        let a_variant = a.row_id_or();
+
+        match (e_variant, a_variant) {
+            /* enforce immutability of datoms with :entity/uuid attributes */
+            (_, either::Left(rowid)) if rowid == ENTITY_UUID_ROWID => {
+                return Err(Error::Immutable(":entity/uuid"))
+            }
+            (_, either::Right(a)) if a == &ENTITY_UUID => {
+                return Err(Error::Immutable(":entity/uuid")); /* rustfmt plz no */
+            }
+            // TODO we can't properly prohibit modification of special datoms like entity/uuid
+            // unless we know what uuid it has ahead of time?
+            // (e, a) if a == &ATTR_UNIQUE => {
+            //     return Err(Error::Protected)
+            // }
+            _ => return Ok(()),
+        }
+    }
+
+    fn set_datoms_unique_for_attribute<E>(&self, e: &E, v: bool) -> Result<usize>
+    where
+        E: RowIdOr<EntityId>,
+    {
+        let e_variant = e.row_id_or();
+
+        let (e, e_bind_str) = match e_variant.as_ref() {
+            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
+            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
+        };
+
+        let sql = format!(
+            r#"
+             UPDATE datoms
+                SET unique_for_attribute = ?
+              WHERE datoms.a = {e};"#,
+            e = e_bind_str,
+        );
+        let params = rusqlite::params![v, e];
+        let mut stmt = self.tx.prepare(&sql)?;
+        match stmt.execute(params) {
+            Ok(n) => Ok(n),
             Err(e) => Err(Error::promote_rusqlite(e)),
         }
     }
@@ -691,7 +742,7 @@ mod tests {
             let user = s.new_attribute(":rating/user")?;
 
             let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(1_000) {
+            for result in r.deserialize().take(2_000) {
                 let rating: Rating = result?;
 
                 // if this is a rating for a book we didn't add, ignore it
@@ -707,6 +758,7 @@ mod tests {
             }
         }
 
+        s.optimize()?;
         s.commit()?;
         return Ok(db);
 
@@ -781,11 +833,7 @@ mod tests {
         {
             let session = Session::new(&mut db).unwrap();
             session.assert(&bob2, &name, &bob_name).unwrap();
-            let res = session.assert(
-                &name,
-                &AttributeName::from_static(":attr/unique"),
-                &Value::Integer(1),
-            );
+            let res = session.assert(&name, &ATTR_UNIQUE, &Value::Integer(1));
             assert_eq!(res, Err(Error::NotUniqueForAttribute));
         };
 
@@ -793,11 +841,7 @@ mod tests {
         {
             let session = Session::new(&mut db).unwrap();
             session
-                .assert(
-                    &name,
-                    &AttributeName::from_static(":attr/unique"),
-                    &Value::Integer(1),
-                )
+                .assert(&name, &ATTR_UNIQUE, &Value::Integer(1))
                 .unwrap();
             session.commit().unwrap();
         }
@@ -812,11 +856,7 @@ mod tests {
         {
             let session = Session::new(&mut db).unwrap();
             session
-                .retract(
-                    &name,
-                    &AttributeName::from_static(":attr/unique"),
-                    &Value::Integer(1),
-                )
+                .retract(&name, &ATTR_UNIQUE, &Value::Integer(1))
                 .unwrap();
             session.commit().unwrap();
         }
@@ -826,6 +866,31 @@ mod tests {
             session.assert(&bob2, &name, &bob_name).unwrap();
             session.commit().unwrap();
         }
+    }
+
+    #[test]
+    fn fuck_with_entity_uuid() {
+        let mut db = blank_db().unwrap();
+        let session = Session::new(&mut db).unwrap();
+
+        // assert_eq!(
+        //     session.retract(
+        //         &types::RowId(ENTITY_UUID_ROWID),
+        //         &ATTR_UNIQUE,
+        //         &Value::Integer(1),
+        //     ),
+        //     Err(Error::Protected)
+        // );
+
+        let e = session.new_entity().unwrap();
+        assert_eq!(
+            session.retract(&e, &ENTITY_UUID, &e.id),
+            Err(Error::Immutable(":entity/uuid"))
+        );
+        assert_eq!(
+            session.assert(&e, &ENTITY_UUID, &Value::Integer(420)),
+            Err(Error::Immutable(":entity/uuid"))
+        );
     }
 
     #[test]
@@ -922,7 +987,7 @@ mod tests {
         p.add_patterns(&patterns);
 
         let var_v = p.var("v").unwrap();
-        p.add_constraint(var_v.le(matter::Concept::Value(&max_rating)));
+        p.add_constraint(var_v.le(matter::Concept::value(&max_rating)));
 
         let book_attrs = [
             AttributeName::from_static(":book/title"),

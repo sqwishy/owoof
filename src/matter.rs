@@ -246,6 +246,15 @@ impl<'a, V> Constraint<'a, V> {
     }
 }
 
+impl<'a, V> Concept<'a, V>
+where
+    V: Assertable,
+{
+    pub fn value(v: &'a V) -> Self {
+        Concept::Value(v.affinity(), v)
+    }
+}
+
 impl<'a, V> From<Location> for Concept<'a, V> {
     fn from(o: Location) -> Concept<'a, V> {
         Concept::Location(o)

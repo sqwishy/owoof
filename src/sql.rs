@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 
 use rusqlite::types::ToSql;
 
-use crate::matter::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
+use crate::projection::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
 use crate::types::Assertable;
 
 pub trait ToSqlDebug: ToSql + Debug {}
@@ -30,7 +30,7 @@ where
     }
 }
 
-impl<'a, P, T> AddToQuery<P> for matter::AttributeMap<'a, T> {
+impl<'a, P, T> AddToQuery<P> for projection::AttributeMap<'a, T> {
     fn add_to_query<W>(&self, query: &mut W)
     where
         W: QueryWriter<P>,
@@ -45,12 +45,12 @@ impl<'a, P, T> AddToQuery<P> for matter::AttributeMap<'a, T> {
     }
 }
 
-impl<P> AddToQuery<P> for matter::Location {
+impl<P> AddToQuery<P> for projection::Location {
     fn add_to_query<W>(&self, query: &mut W)
     where
         W: QueryWriter<P>,
     {
-        let &matter::Location { field, datomset } = self;
+        let &projection::Location { field, datomset } = self;
 
         query.nl();
         match field {
@@ -347,11 +347,11 @@ where
     Ok(())
 }
 
-pub fn location_sql<W: Write>(l: &matter::Location, w: &mut W) -> fmt::Result {
+pub fn location_sql<W: Write>(l: &projection::Location, w: &mut W) -> fmt::Result {
     write!(w, "{}", location(l))
 }
 
-pub fn location(l: &matter::Location) -> String {
+pub fn location(l: &projection::Location) -> String {
     match l.field {
         Field::Entity => datomset_e(l.datomset),
         Field::Attribute => datomset_a(l.datomset),
@@ -379,7 +379,7 @@ pub fn datomset_v(datomset: DatomSet) -> String {
 ///     S: AddToQuery<V> or S: AddToQuery<&V> ???
 pub fn selection_sql<'q, 'a: 'q, 'p, V, S>(
     // TODO use different lifetimes for 'a?
-    s: &'a matter::Selection<'a, 'p, V, S>,
+    s: &'a projection::Selection<'a, 'p, V, S>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
@@ -402,7 +402,7 @@ where
 }
 
 pub fn order_by_sql<W: Write>(
-    order_by: &[(matter::Location, matter::Ordering)],
+    order_by: &[(projection::Location, projection::Ordering)],
     w: &mut W,
 ) -> fmt::Result {
     let pre = std::iter::once("ORDER BY ").chain(std::iter::repeat(", "));
@@ -413,8 +413,8 @@ pub fn order_by_sql<W: Write>(
             pre = pre,
             col = location(term_location),
             ord = match ordering {
-                matter::Ordering::Asc => " ASC",
-                matter::Ordering::Desc => " DESC",
+                projection::Ordering::Asc => " ASC",
+                projection::Ordering::Desc => " DESC",
             }
         )?;
     }
@@ -521,7 +521,7 @@ where
     }
 }
 
-impl<'a, V> ReadFromRow for matter::AttributeMap<'a, V>
+impl<'a, V> ReadFromRow for projection::AttributeMap<'a, V>
 where
     V: crate::FromAffinityValue,
 {
@@ -537,7 +537,7 @@ where
     }
 }
 
-impl ReadFromRow for matter::Location {
+impl ReadFromRow for projection::Location {
     /// TODO the whole point of the phantom data in AttributeMap is to disambiguate this
     /// type ... so that we can share the same value types in both directions of the
     /// database.

@@ -1,7 +1,7 @@
 //! How is this organized?
 //!
 //! - lib.rs - Session
-//! - matter.rs - Projection? Borrows patterns into datom sets & constraints
+//! - projection.rs - Projection? Borrows patterns into datom sets & constraints
 //!             - 3-tuple of variable or entity, variable or attribute, variable or value
 //! - sql.rs - render a SQL query for a Projection
 //!
@@ -65,7 +65,7 @@
 #![allow(clippy::needless_return)]
 
 pub mod explain;
-pub mod matter;
+pub mod projection;
 pub mod sql;
 pub mod types;
 
@@ -83,7 +83,9 @@ use anyhow::Context;
 use uuid::Uuid;
 
 use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
-pub use matter::{AttributeMap, Location, Ordering, Pattern, Projection, Selection, VariableOr};
+pub use projection::{
+    AttributeMap, Location, Ordering, Pattern, Projection, Selection, VariableOr,
+};
 pub use types::{
     Affinity, Assertable, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, RowIdOr,
     Value,
@@ -987,7 +989,7 @@ mod tests {
         p.add_patterns(&patterns);
 
         let var_v = p.var("v").unwrap();
-        p.add_constraint(var_v.le(matter::Concept::value(&max_rating)));
+        p.add_constraint(var_v.le(projection::Concept::value(&max_rating)));
 
         let book_attrs = [
             AttributeName::from_static(":book/title"),

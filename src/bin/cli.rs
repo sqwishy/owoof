@@ -23,21 +23,21 @@ impl<'a> ArgError<'a> {
 
 #[derive(Debug)]
 enum Show<'a> {
-    Location(oof::Location),
-    Map(oof::AttributeMap<'a, oof::Value>),
+    Location(owoof::Location),
+    Map(owoof::AttributeMap<'a, owoof::Value>),
 }
 
 #[derive(Debug, serde::Serialize)]
 #[serde(untagged)]
 enum Shown<'a> {
-    Value(oof::Value),
-    Map(HashMap<&'a oof::AttributeName<'a>, oof::Value>),
+    Value(owoof::Value),
+    Map(HashMap<&'a owoof::AttributeName<'a>, owoof::Value>),
 }
 
-impl<'a, P> oof::sql::AddToQuery<P> for Show<'a> {
+impl<'a, P> owoof::sql::AddToQuery<P> for Show<'a> {
     fn add_to_query<W>(&self, query: &mut W)
     where
-        W: oof::sql::QueryWriter<P>,
+        W: owoof::sql::QueryWriter<P>,
     {
         match self {
             Show::Location(i) => i.add_to_query(query),
@@ -46,10 +46,10 @@ impl<'a, P> oof::sql::AddToQuery<P> for Show<'a> {
     }
 }
 
-impl<'a> oof::sql::ReadFromRow for Show<'a> {
+impl<'a> owoof::sql::ReadFromRow for Show<'a> {
     type Out = Shown<'a>;
 
-    fn read_from_row(&self, c: &mut oof::sql::RowCursor) -> rusqlite::Result<Self::Out> {
+    fn read_from_row(&self, c: &mut owoof::sql::RowCursor) -> rusqlite::Result<Self::Out> {
         match self {
             Show::Location(i) => i.read_from_row(c).map(Shown::Value),
             Show::Map(i) => i.read_from_row(c).map(Shown::Map),
@@ -75,9 +75,9 @@ enum Command<'a> {
     Query {
         mode: QueryMode,
         path: PathBuf,
-        show: Vec<(&'a str, Vec<oof::AttributeName<'a>>)>,
-        patterns: Vec<oof::Pattern<'a, oof::Value>>,
-        order: Vec<(&'a str, Vec<oof::AttributeName<'a>>, oof::Ordering)>,
+        show: Vec<(&'a str, Vec<owoof::AttributeName<'a>>)>,
+        patterns: Vec<owoof::Pattern<'a, owoof::Value>>,
+        order: Vec<(&'a str, Vec<owoof::AttributeName<'a>>, owoof::Ordering)>,
         limit: i64,
     },
 }
@@ -87,7 +87,7 @@ impl<'a> Command<'a> {
         match self {
             Command::Init { path } => {
                 let mut conn = rusqlite::Connection::open(&path)?;
-                oof::Session::init_schema(&mut conn)?;
+                owoof::Session::init_schema(&mut conn)?;
                 println!("New database created at {}", path.display());
                 Ok(())
             }
@@ -97,10 +97,10 @@ impl<'a> Command<'a> {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
                 )?;
-                let sess = oof::Session::new(&mut conn)?;
+                let sess = owoof::Session::new(&mut conn)?;
 
                 let mut stdin = std::io::stdin();
-                let stuff: OwO<std::collections::HashMap<oof::AttributeName, oof::Value>> =
+                let stuff: OwO<std::collections::HashMap<owoof::AttributeName, owoof::Value>> =
                     serde_json::from_reader(&mut stdin)?;
 
                 eprintln!("{:?}", stuff);
@@ -136,11 +136,11 @@ impl<'a> Command<'a> {
                         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
                 )?;
 
-                let sess = oof::Session::new(&mut conn)?;
+                let sess = owoof::Session::new(&mut conn)?;
 
                 let start = std::time::Instant::now();
 
-                let mut p = oof::Projection::from_patterns(&patterns);
+                let mut p = owoof::Projection::from_patterns(&patterns);
 
                 let mut selection = show
                     .iter()
@@ -164,7 +164,7 @@ impl<'a> Command<'a> {
                     {
                         selection.push(Show::Location(*loc));
                     } else {
-                        let map = p.attribute_map("_", std::iter::once(&oof::types::ENTITY_UUID));
+                        let map = p.attribute_map("_", std::iter::once(&owoof::types::ENTITY_UUID));
                         selection.push(Show::Map(map));
                     }
                 }
@@ -253,7 +253,7 @@ fn main() {
             eprintln!("<pattern> is ...TODO");
             eprintln!("<show>    is ?var [:some/attribute...]");
             eprintln!(
-                "the default path (set by OOF_DB) is {}",
+                "the default path (set by OWOOF_DB) is {}",
                 default_db_path().display()
             );
             std::process::exit(1);
@@ -274,14 +274,14 @@ fn main() {
 }
 
 fn default_db_path() -> PathBuf {
-    std::env::var_os("OOF_DB")
+    std::env::var_os("OWOOF_DB")
         .map(PathBuf::from)
-        .unwrap_or("oof.sqlite".into())
+        .unwrap_or("owoof.sqlite".into())
 }
 
 fn default_limit() -> i64 {
-    std::env::var("OOF_LIMIT")
-        .map(|s| s.parse().expect("parse OOF_LIMIT environment variable"))
+    std::env::var("OWOOF_LIMIT")
+        .map(|s| s.parse().expect("parse OWOOF_LIMIT environment variable"))
         .unwrap_or(10)
 }
 
@@ -324,11 +324,11 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
             }
             "--asc" => {
                 let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
-                order.push((v, oof::Ordering::Asc));
+                order.push((v, owoof::Ordering::Asc));
             }
             "--desc" => {
                 let v = args.next().ok_or(ArgError::NeedsValue(arg))?;
-                order.push((v, oof::Ordering::Desc));
+                order.push((v, owoof::Ordering::Desc));
             }
             "--find" => mode = QueryMode::Find,
             "--explain" => mode = QueryMode::Explain,
@@ -366,8 +366,8 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
             parse_show(ordering)
                 .map(|(var, attrs)| (var, attrs, ord))
                 .map_err(ArgError::invalid(match ord {
-                    oof::Ordering::Asc => "--asc",
-                    oof::Ordering::Desc => "--desc",
+                    owoof::Ordering::Asc => "--asc",
+                    owoof::Ordering::Desc => "--desc",
                 }))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -382,31 +382,33 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
     });
 }
 
-fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>> {
+fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<owoof::Pattern<'a, owoof::Value>> {
     let mut parts = s.splitn(3, |s: char| s.is_ascii_whitespace());
     match (parts.next(), parts.next(), parts.next()) {
         (Some(e), Some(a), Some(v)) => {
             let entity = parse_variable(e)
-                .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
+                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
                 .or_else(|_| {
                     /* TODO this is fairly confusing, entity references are plain UUIDs in the
                      * entity part of the pattern but they are JSON strings with a leading # in the
                      * value field of the pattern. Maybe always require the leading # or whatever
                      * symbol? somewhat consistent with :attributes and ?variables */
                     e.parse::<uuid::Uuid>()
-                        .map(oof::EntityId::from)
-                        .map(oof::VariableOr::Value)
+                        .map(owoof::EntityId::from)
+                        .map(owoof::VariableOr::Value)
                 })?;
 
             let attribute = parse_variable(a)
-                .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
-                .or_else(|_| parse_attribute(a).map(oof::VariableOr::Value))?;
+                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
+                .or_else(|_| parse_attribute(a).map(owoof::VariableOr::Value))?;
 
             let value = parse_variable(v)
-                .map(|var| oof::VariableOr::Variable(std::borrow::Cow::from(var)))
-                .or_else(|_| serde_json::from_str::<oof::Value>(v).map(oof::VariableOr::Value))?;
+                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
+                .or_else(|_| {
+                    serde_json::from_str::<owoof::Value>(v).map(owoof::VariableOr::Value)
+                })?;
 
-            Ok(oof::Pattern {
+            Ok(owoof::Pattern {
                 entity,
                 attribute,
                 value,
@@ -416,7 +418,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<oof::Pattern<'a, oof::Value>>
     }
 }
 
-fn parse_show<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<oof::AttributeName<'a>>)> {
+fn parse_show<'a>(s: &'a str) -> anyhow::Result<(&'a str, Vec<owoof::AttributeName<'a>>)> {
     let mut terms = s.split_ascii_whitespace().filter(|s| !s.is_empty());
     let var = match terms.next().map(parse_variable) {
         None => anyhow::bail!("variable expected, none found"),
@@ -436,8 +438,8 @@ fn parse_variable<'a>(s: &'a str) -> anyhow::Result<&'a str> {
     Ok(&s[1..])
 }
 
-fn parse_attribute<'a>(s: &'a str) -> anyhow::Result<oof::AttributeName<'a>> {
+fn parse_attribute<'a>(s: &'a str) -> anyhow::Result<owoof::AttributeName<'a>> {
     use std::borrow::Cow;
     use std::convert::TryFrom;
-    oof::AttributeName::try_from(Cow::Borrowed(s)).map_err(anyhow::Error::msg)
+    owoof::AttributeName::try_from(Cow::Borrowed(s)).map_err(anyhow::Error::msg)
 }

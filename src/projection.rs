@@ -113,56 +113,56 @@ pub struct Pattern<'a, V> {
 #[macro_export]
 macro_rules! pat {
     (?$e:ident $a:tt ?$v:ident) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:var $e),
             attribute: _varorval!(:val $a),
             value: _varorval!(:var $v),
         }
     }};
     (?$e:ident ?$a:ident $v:tt) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:var $e),
             attribute: _varorval!(:var $a),
             value: _varorval!(:val $v),
         }
     }};
     (?$e:ident $a:tt $v:tt) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:var $e),
             attribute: _varorval!(:val $a),
             value: _varorval!(:val $v),
         }
     }};
     (?$e:ident ?$a:ident ?$v:ident) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:var $e),
             attribute: _varorval!(:var $a),
             value: _varorval!(:var $v),
         }
     }};
     ($e:tt $a:tt ?$v:ident) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:val $e),
             attribute: _varorval!(:val $a),
             value: _varorval!(:var $v),
         }
     }};
     ($e:tt ?$a:ident $v:tt) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:val $e),
             attribute: _varorval!(:var $a),
             value: _varorval!(:val $v),
         }
     }};
     ($e:tt $a:tt $v:tt) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:val $e),
             attribute: _varorval!(:val $a),
             value: _varorval!(:val $v),
         }
     }};
     ($e:tt ?$a:ident ?$v:ident) => {{
-       $crate::matter::Pattern {
+       $crate::projection::Pattern {
             entity: _varorval!(:val $e),
             attribute: _varorval!(:var $a),
             value: _varorval!(:var $v),
@@ -173,10 +173,10 @@ macro_rules! pat {
 #[macro_export]
 macro_rules! _varorval {
     (:var $v:ident) => {
-        $crate::matter::VariableOr::Variable(stringify!($v).into())
+        $crate::projection::VariableOr::Variable(stringify!($v).into())
     };
     (:val $v:tt) => {
-        $crate::matter::VariableOr::Value($v.into())
+        $crate::projection::VariableOr::Value($v.into())
     };
 }
 

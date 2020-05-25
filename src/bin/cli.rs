@@ -1,7 +1,7 @@
 //! hi
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
@@ -57,6 +57,16 @@ impl<'a> owoof::sql::ReadFromRow for Show<'a> {
     }
 }
 
+fn open_database<P: AsRef<Path>>(path: P) -> rusqlite::Result<rusqlite::Connection> {
+    rusqlite::Connection::open(&path)
+}
+
+fn read_database<P: AsRef<Path>>(path: P) -> rusqlite::Result<rusqlite::Connection> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    rusqlite::Connection::open_with_flags(&path, flags)
+}
+
 #[derive(Debug)]
 enum QueryMode {
     Find,
@@ -67,6 +77,9 @@ enum QueryMode {
 #[derive(Debug)]
 enum Command<'a> {
     Init {
+        path: PathBuf,
+    },
+    Retract {
         path: PathBuf,
     },
     Assert {
@@ -84,26 +97,46 @@ enum Command<'a> {
 
 impl<'a> Command<'a> {
     fn run(self) -> anyhow::Result<()> {
+        #[derive(serde::Deserialize, Debug)]
+        #[serde(untagged)]
+        enum OwO<T> {
+            Many(Vec<T>),
+            One(T),
+        }
+
         match self {
             Command::Init { path } => {
-                let mut conn = rusqlite::Connection::open(&path)?;
+                let mut conn = open_database(&path)?;
                 owoof::Session::init_schema(&mut conn)?;
                 println!("New database created at {}", path.display());
                 Ok(())
             }
-            Command::Assert { path } => {
-                let mut conn = rusqlite::Connection::open_with_flags(
-                    &path,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                )?;
-                let sess = owoof::Session::new(&mut conn)?;
 
+            Command::Retract { path } => {
                 let mut stdin = std::io::stdin();
+                let mut conn = read_database(&path)?;
+                let sess = owoof::Session::new(&mut conn)?;
                 let stuff: OwO<std::collections::HashMap<owoof::AttributeName, owoof::Value>> =
                     serde_json::from_reader(&mut stdin)?;
 
-                eprintln!("{:?}", stuff);
+                match stuff {
+                    OwO::Many(stuff) => todo!("{:?}", stuff),
+                    OwO::One(stuff) => {
+                        let n = sess.retract_obj(&stuff).context("retract object")?;
+                        println!("{}", n);
+                    }
+                };
+
+                return sess.commit().context("commit transaction");
+            }
+
+            Command::Assert { path } => {
+                let mut stdin = std::io::stdin();
+                let mut conn = read_database(&path)?;
+                let sess = owoof::Session::new(&mut conn)?;
+                let stuff: OwO<std::collections::HashMap<owoof::AttributeName, owoof::Value>> =
+                    serde_json::from_reader(&mut stdin)?;
+
                 match stuff {
                     OwO::Many(stuff) => todo!("{:?}", stuff),
                     OwO::One(stuff) => {
@@ -114,14 +147,8 @@ impl<'a> Command<'a> {
                 };
 
                 return sess.commit().context("commit transaction");
-
-                #[derive(serde::Deserialize, Debug)]
-                #[serde(untagged)]
-                enum OwO<T> {
-                    Many(Vec<T>),
-                    One(T),
-                }
             }
+
             Command::Query {
                 mode,
                 path,
@@ -130,12 +157,7 @@ impl<'a> Command<'a> {
                 order,
                 limit,
             } => {
-                let mut conn = rusqlite::Connection::open_with_flags(
-                    &path,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                )?;
-
+                let mut conn = read_database(&path)?;
                 let sess = owoof::Session::new(&mut conn)?;
 
                 let start = std::time::Instant::now();
@@ -249,6 +271,7 @@ fn main() {
                 prog
             );
             eprintln!("       {} [--db <path>] assert", prog);
+            eprintln!("       {} [--db <path>] retract", prog);
             eprintln!("       {} [--db <path>] init", prog);
             eprintln!("<pattern> is ...TODO");
             eprintln!("<show>    is ?var [:some/attribute...]");
@@ -307,6 +330,10 @@ fn parse_args<'a, I: Iterator<Item = &'a str>>(mut args: I) -> Result<Command<'a
             "assert" => {
                 let path = parse_db_path(db)?;
                 return Ok(Command::Assert { path });
+            }
+            "retract" => {
+                let path = parse_db_path(db)?;
+                return Ok(Command::Retract { path });
             }
             "init" => {
                 let path = parse_db_path(db)?;

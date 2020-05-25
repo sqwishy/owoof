@@ -118,6 +118,8 @@ pub enum Error {
     NotUniqueForEntity,
     #[error("value must be unique for the attribute")]
     NotUniqueForAttribute,
+    #[error("invalid object: {0}")]
+    InvalidObject(&'static str),
     #[error("{0} is immutable")]
     Immutable(&'static str),
     #[error("this value is protected from modification")]
@@ -339,7 +341,7 @@ impl<'db> Session<'db> {
                 Some(entity) => entity,
                 None => self.new_entity_at(*name)?,
             },
-            Some(_) => panic!("expected uuid for :entity/uuid"),
+            Some(_) => Err(Error::InvalidObject("expected uuid for :entity/uuid"))?,
             None => self.new_entity()?,
         };
 
@@ -351,6 +353,20 @@ impl<'db> Session<'db> {
         }
 
         Ok(entity)
+    }
+
+    pub fn retract_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<usize> {
+        let entity = match obj.get(&ENTITY_UUID) {
+            Some(Value::Entity(name)) => name,
+            Some(_) => Err(Error::InvalidObject("expected uuid for :entity/uuid"))?,
+            None => Err(Error::InvalidObject(":entity/uuid missing in retraction"))?,
+        };
+
+        obj.iter()
+            .filter(|(a, _)| *a != &ENTITY_UUID)
+            .try_fold(0usize, |mut sum, (a, v)| {
+                self.retract(entity, a, v).map(|_| sum += 1).map(|_| sum)
+            })
     }
 
     pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>

@@ -3,6 +3,7 @@ name = "owoof"
 version = "0.1.0"
 authors = ["sqwishy <somebody@froghat.ca>"]
 edition = "2018"
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -19,17 +20,10 @@ anyhow = "1"             # Flexible concrete Error type built on std::error::Err
 thiserror = "1"          # derive(Error)
 rusqlite = { version = "0.23", features = ["uuid", "functions"] }
 
-either = "1.5"                   # The enum `Either` with variants `Left` and `Right` is a general purpose sum type with two ca…
-
-# serde_json = "1"
-# serde_cbor = "0.10"
-# erased-serde = "0.3"         # Type-erased Serialize and Serializer traits
+either = "1"                   # The enum `Either` with variants `Left` and `Right` is a general purpose sum type with two ca…
 
 uuid = { version = "0.8", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-
-# lazy_static = "1"
-# regex = "1"
 
 serde_json = { version = "1", optional = true }
 

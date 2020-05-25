@@ -67,6 +67,19 @@ fn read_database<P: AsRef<Path>>(path: P) -> rusqlite::Result<rusqlite::Connecti
     rusqlite::Connection::open_with_flags(&path, flags)
 }
 
+fn is_no_db_error(e: &rusqlite::Error) -> bool {
+    match e {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::CannotOpen,
+                extended_code: 14,
+            },
+            _,
+        ) => true,
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 enum QueryMode {
     Find,
@@ -276,7 +289,7 @@ fn main() {
     let prog = args
         .first()
         .map(|s| s.rsplit('/').next().unwrap_or(s))
-        .unwrap_or("???");
+        .unwrap_or("owoof");
 
     match parse_args(args.iter().skip(1).map(|s| s.as_str())) {
         Err(e) => {
@@ -297,13 +310,23 @@ fn main() {
             std::process::exit(1);
         }
         Ok(cmd) => {
-            /* eprintln!("{:#?}", cmd); */
+            let mut suggest_init = false;
             if let Err(e) = cmd.run() {
                 print!("error");
                 for cause in e.chain() {
+                    if let Some(e) = cause.downcast_ref::<rusqlite::Error>() {
+                        if is_no_db_error(e) {
+                            suggest_init = true;
+                        }
+                    }
+
                     print!(": {}", cause);
                 }
                 println!("");
+
+                if suggest_init {
+                    println!("try creating a new database with `{} init`", prog);
+                }
 
                 std::process::exit(1);
             }

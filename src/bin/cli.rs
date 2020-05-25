@@ -120,7 +120,15 @@ impl<'a> Command<'a> {
                     serde_json::from_reader(&mut stdin)?;
 
                 match stuff {
-                    OwO::Many(stuff) => todo!("{:?}", stuff),
+                    OwO::Many(many) => {
+                        let n = many
+                            .iter()
+                            .try_fold(0usize, |mut sum, stuff| {
+                                sess.retract_obj(&stuff).map(|_| sum += 1).map(|_| sum)
+                            })
+                            .context("retract object")?;
+                        println!("{}", n);
+                    }
                     OwO::One(stuff) => {
                         let n = sess.retract_obj(&stuff).context("retract object")?;
                         println!("{}", n);
@@ -138,7 +146,14 @@ impl<'a> Command<'a> {
                     serde_json::from_reader(&mut stdin)?;
 
                 match stuff {
-                    OwO::Many(stuff) => todo!("{:?}", stuff),
+                    OwO::Many(many) => {
+                        let vec = many
+                            .iter()
+                            .map(|stuff| sess.assert_obj(stuff).map(|ent| ent.id))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let jaysons = serde_json::to_string_pretty(&vec)?;
+                        println!("{}", jaysons);
+                    }
                     OwO::One(stuff) => {
                         let ent = sess.assert_obj(&stuff).context("assert object")?;
                         let jaysons = serde_json::to_string_pretty(&ent.id)?;

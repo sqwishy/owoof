@@ -1,17 +1,25 @@
 Owoof
 =====
 
+[<img alt="github" src="https://img.shields.io/badge/github-sqwishy/owoof-076678?style=for-the-badge&labelColor=282828&logo=github" height="22">](https://github.com/sqwishy/owoof)
+[<img alt="crates.io" src="https://img.shields.io/crates/v/owoof.svg?style=for-the-badge&color=282828&labelColor=282828&logo=rust" height="22">](https://crates.io/crates/owoof)
+[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-owoof-427b58?style=for-the-badge&labelColor=282828" height="22">](https://docs.rs/owoof)
+
 A glorified query-builder inspired by [Datomic](https://docs.datomic.com/cloud/index.html)
 that uses a datalog-like format for querying and modifying information around a SQLite
 database.
 
 Be warned, this is a toy project not meant to be used for anything serious. It's derpy
-and has known issues.
+and has (un)known issues.
 
-This is implemented as a rust library. There is an accompanying rust executable target
-that provides a command-line-interface.
+This is implemented as a rust library. It is documented, you can read the source or
+maybe find the [documentation published on docs.rs](https://docs.rs/owoof/*/owoof/).
+
+There is an accompanying rust executable target that provides a command-line-interface.
 
 ## CLI
+
+Compile this with `cargo build` using `--features cli --bin cli`.
 
 The CLI can be used to initialize new database files, assert/create, retract/remove, or
 query information.

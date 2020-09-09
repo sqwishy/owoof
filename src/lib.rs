@@ -1,5 +1,6 @@
 //! I have [a wordy post on my blog](https://froghat.ca/blag/dont-woof/) that talks a
-//! little bit about why this is and how it was designed.
+//! little bit about why this is and how it was designed. But it's very high-level and
+//! you shouldn't read that. This is terse and to-the-point; so read this instead.
 //!
 //! ## How is this organized?
 //!

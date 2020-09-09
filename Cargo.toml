@@ -4,8 +4,10 @@ version = "0.1.0"
 authors = ["sqwishy <somebody@froghat.ca>"]
 edition = "2018"
 license = "Apache-2.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/sqwishy/owoof"
+homepage = "https://github.com/sqwishy/owoof"
+description = "Uses SQLite to store data and a datalog-like means to query it. "
+keywords = ["datalog", "sqlite"]
 
 [[bin]]
 name = "cli"

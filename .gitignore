@@ -2,3 +2,4 @@
 Cargo.lock
 memes
 goodbooks-10k
+*.sqlite

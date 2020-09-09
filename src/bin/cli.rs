@@ -452,7 +452,7 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<owoof::Pattern<'a, owoof::Val
     match (parts.next(), parts.next(), parts.next()) {
         (Some(e), Some(a), Some(v)) => {
             let entity = parse_variable(e)
-                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
+                .map(|var| owoof::Match::Variable(std::borrow::Cow::from(var)))
                 .or_else(|_| {
                     /* TODO this is fairly confusing, entity references are plain UUIDs in the
                      * entity part of the pattern but they are JSON strings with a leading # in the
@@ -460,18 +460,16 @@ fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<owoof::Pattern<'a, owoof::Val
                      * symbol? somewhat consistent with :attributes and ?variables */
                     e.parse::<uuid::Uuid>()
                         .map(owoof::EntityId::from)
-                        .map(owoof::VariableOr::Value)
+                        .map(owoof::Match::Value)
                 })?;
 
             let attribute = parse_variable(a)
-                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
-                .or_else(|_| parse_attribute(a).map(owoof::VariableOr::Value))?;
+                .map(|var| owoof::Match::Variable(std::borrow::Cow::from(var)))
+                .or_else(|_| parse_attribute(a).map(owoof::Match::Value))?;
 
             let value = parse_variable(v)
-                .map(|var| owoof::VariableOr::Variable(std::borrow::Cow::from(var)))
-                .or_else(|_| {
-                    serde_json::from_str::<owoof::Value>(v).map(owoof::VariableOr::Value)
-                })?;
+                .map(|var| owoof::Match::Variable(std::borrow::Cow::from(var)))
+                .or_else(|_| serde_json::from_str::<owoof::Value>(v).map(owoof::Match::Value))?;
 
             Ok(owoof::Pattern {
                 entity,

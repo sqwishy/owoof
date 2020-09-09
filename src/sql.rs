@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 use rusqlite::types::ToSql;
 
 use crate::projection::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
-use crate::types::Assertable;
+use crate::types::HasAffinity;
 
 pub trait ToSqlDebug: ToSql + Debug {}
 impl<T: ToSql + Debug> ToSqlDebug for T {}
@@ -193,6 +193,8 @@ where
     }
 }
 
+/// A string buffer for a SQL query with a list of a values that should be passed along
+/// as query parameters to [rusqlite] when querying.
 #[derive(Debug)]
 pub struct GenericQuery<P> {
     string: String,
@@ -275,13 +277,13 @@ impl<P> GenericQuery<P> {
     }
 }
 
-// TODO XXX FIXME require V to be assertable so we can get an affinity from it?
+/// pushes FROM _ WHERE _ statements to a [GenericQuery].
 pub fn projection_sql<'q, 'a: 'q, V>(
     projection: &'a Projection<'a, V>,
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
-    V: Debug + ToSql + Assertable,
+    V: Debug + ToSql + HasAffinity,
 {
     assert!(projection.datomsets() > 0);
 
@@ -375,6 +377,8 @@ pub fn datomset_v(datomset: DatomSet) -> String {
     format!("datoms{}.v", datomset.0)
 }
 
+/// Pushes SELECT _ FROM _ WHERE _ ORDER BY _ LIMIT _ statements onto a [GenericQuery].
+///
 /// TODO XXX FIXME the V and S types are supposed to be related somehow?
 ///     S: AddToQuery<V> or S: AddToQuery<&V> ???
 pub fn selection_sql<'q, 'a: 'q, 'p, V, S>(
@@ -383,7 +387,7 @@ pub fn selection_sql<'q, 'a: 'q, 'p, V, S>(
     query: &'q mut GenericQuery<&'a dyn ToSqlDebug>,
 ) -> fmt::Result
 where
-    V: ToSqlDebug + Assertable,
+    V: ToSqlDebug + HasAffinity,
     S: AddToQuery<&'a dyn ToSqlDebug>,
 {
     use std::iter::{once, repeat};

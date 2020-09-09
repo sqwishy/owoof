@@ -1,6 +1,5 @@
 use std::{
     borrow::{Borrow, Cow},
-    collections::HashMap,
     convert::TryFrom,
     ops::Deref,
 };
@@ -226,24 +225,24 @@ impl TryFrom<i64> for Affinity {
     }
 }
 
-/// Has an affinity ... TODO rename this
-pub trait Assertable {
+/// Has an [Affinity]
+pub trait HasAffinity {
     fn affinity(&self) -> Affinity;
 }
 
-impl Assertable for EntityId {
+impl HasAffinity for EntityId {
     fn affinity(&self) -> Affinity {
         Affinity::Entity
     }
 }
 
-impl<'a> Assertable for AttributeName<'a> {
+impl<'a> HasAffinity for AttributeName<'a> {
     fn affinity(&self) -> Affinity {
         Affinity::Attribute
     }
 }
 
-impl<'a, I> Assertable for I
+impl<'a, I> HasAffinity for I
 where
     I: Into<rusqlite::types::Value>,
 {
@@ -336,7 +335,7 @@ impl FromAffinityValue for Value {
     }
 }
 
-impl Assertable for Value {
+impl HasAffinity for Value {
     fn affinity(&self) -> Affinity {
         match self {
             Value::Entity(_) => Affinity::Entity,

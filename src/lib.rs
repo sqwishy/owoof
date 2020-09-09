@@ -1,64 +1,107 @@
-//! How is this organized?
+//! I have [a wordy post on my blog](https://froghat.ca/blag/dont-woof/) that talks a
+//! little bit about why this is and how it was designed.
 //!
-//! - lib.rs - Session
-//! - projection.rs - Projection? Borrows patterns into datom sets & constraints
-//!             - 3-tuple of variable or entity, variable or attribute, variable or value
-//! - sql.rs - render a SQL query for a Projection
+//! ## How is this organized?
 //!
-//! The names are terrible, iirc there are two interesting ways to view a list
-//! of patterns as a graph.
+//! - lib.rs (this file) defines a [`Session`] which wraps and owns an active database
+//!   transaction.  Can be used to [`Session::assert`] [`Session::retract`] or
+//!   [`Session::find`] data.  Probably a good starting point.
 //!
-//! 1. bijection between graph vectors and variables
-//! 2. bijection between graph vectors and datom sets/the 3-tuple pattern
+//! - [types] has a few things used to model the database and our "datoms", like
+//!   [`types::EntityId`], [`types::AttributeName`], and [`types::Value`].  These are used by
+//!   & designed for a `projection::Projection<types::Value>`.
 //!
-//! The Projection sort of models #2.
+//! - [projection] contains a bunch of stuff for taking entity-attribute-value patterns
+//!   and selecting on them in order to find things in the database.  The
+//!   [`projection::Projection`] is pretty cool.
 //!
-//! (?e _ (cast date $))
-//! (?e _ #date $)
-//! (?e _ $::date))
+//! - [explain] just has some implementation for running *EXPLAIN* and *EXPLAIN PLAN*
+//!   queries in SQLite.  Those are accessible through [`Session::explain`] &
+//!   [`Session::explain_plan`].
 //!
-//!-----------------------------------------------------------------------------
-//! DSL:
+//! - [sql] just has a bunch of SQL query string building stuff.
 //!
-//! Only bad people like avocado.
-//! (All people who like avocado are bad.)
-//! (All things with a positive opinion of avocados are bad.)
-//! (Opinion objects and subjects are unique together?)
+//! ## Why & How?
 //!
-//! where  (?o :opinion/subject ?p)
-//!        (?o :opinion/object ?a)
-//!        (?o :opinion/disposition "positive")
-//!        (?a :thing/name "avocado")
-//! assert (?p :person/alignment "bad")
+//! The point of the library is to interact with a SQLite-backed database using
+//! entity-attribute-value "datoms" and pattern matching.
 //!
-//! where  (?p :person/name "Spongebob")
-//!        (?n :pants/shape "square")
-//! assert (?p :person/pants ?n)
+//! If you didn't read the blog post I linked above (I don't blame you), here's a tldr.
 //!
-//! where (?p :person/name "Spongebob")
-//!       (?p :person/pants ?n)
-//!       (?p :pants/shape ?s)
-//! shape {?p ?s}
+//! Consider a database that looks like ...
+//! ```ignore
+//! 100 :animal/name  "Cat"
+//! 100 :pet/name     "Garfield"
+//! 101 :animal/name  "Dog"
+//! 101 :pet/name     "Odie"
+//! 102 :person/name  "John Arbuckle"
+//! 100 :pet/human    102
+//! 101 :pet/human    102
+//! ```
 //!
-//! Show three most recent articles, the authors, and three most recent comments.
+//! And consider this pattern ...
+//! ```ignore
+//! ?_ :pet/name ?_
+//! ```
+//! If we were to match datoms using this pattern, we'd be asking for datoms with: any
+//! entity, for the *:pet/name* attribute, and any value. And we would get the following
+//! two datoms.
+//! ```ignore
+//! 100 :pet/name    "Garfield"
+//! 101 :pet/name    "Odie"
+//! ```
+//! Those are the datoms that exist that match that pattern.
 //!
-//! shape * (
-//!     :article/title
-//!     {:article/author :person/name}
-//!     {(:article/comments limit 3) :comment/content}
-//!     )
+//! Now consider two patterns together ...
+//! ```ignore
+//! ?a :pet/name     ?_
+//! ?a :animal/name  "Cat"
+//! ```
+//! The first pattern matches the set of two datoms from earlier.
+//! The second matches just:
+//! ```ignore
+//! 100 :animal/name "Cat"
+//! ```
+//! But we are *not* interested in *every* combination of datoms matched by both
+//! patterns.  So we related the patterns by constraining the *entity* to the same
+//! variable, *?a*.  This means that we only match the combinations of datoms between
+//! either set when they have the same entity.  So we end up with *one* result with
+//! *two* datoms.
+//! ```ignore
+//! 100 :pet/name    "Garfield"
+//! 100 :animal/name "Cat"
+//! ```
 //!
-//! where ?c :person/dob ?d
-//!       ?p :person/parent ?c
-//!   for "Jan 1 2020" =.. ?d .. "Jan 1 2021"
-//!  show ?c :person/name
-//!       ?p :person/name
-//! (or)
-//! where ?c :person/dob ?d | "Jan 1 2020" <= ?d < "Jan 1 2021"
-//!       ?p :person/parent ?c
+//! It's like if we were to say:
+//! > Match every datom having the attribute *:pet/name* with any value and for some any
+//! > entity named *?a*, match also datoms on the same entity *?a* having the attribute
+//! > *:animal/name* with the value "Cat".
 //!
+//! Another one might be:
+//! ```ignore
+//! ?p :person/name ?person
+//! ?a :pet/human   ?p
+//! ?a :pet/name    ?pet
+//! ```
+//! Here, the variables *?human* and *?pet* don't relate datoms together, but they're
+//! there so we can refer to them when we want to get information out.
+//!
+//! These patterns are saying:
+//! > Given each entity *?a* having the *:pet/name* *?pet*
+//! >   and each entity *?p* having the *:person/name* *?person*,
+//! > match only combinations of these where there exists some datom *?a* *:pet/human*
+//! > *?p*. That is, where *?a*'s human is *?p*.
+//!
+//! The point of this library/program is to allow us to use the above expression to
+//! pattern match on our database and read values by querying variables; like *?person*
+//! and *?pet* to get the two results:
+//! ```ignore
+//! "John Arbuckle" "Garfield"
+//! "John Arbuckle" "Odie"
+//! ```
+//!
+//! Check out the [projection] module for more fun documentation.
 #![allow(dead_code)]
-#![allow(unused_imports)]
 // ^^^ todo; get your shit together ^^^
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::redundant_closure)]
@@ -70,24 +113,14 @@ pub mod sql;
 pub mod types;
 
 use std::collections::HashMap;
-use std::{
-    borrow::{Borrow, Cow},
-    convert::TryFrom,
-    fmt,
-    ops::Deref,
-};
+use std::fmt;
 
-// use rusqlite::types::Value as SqlValue;
-
-use anyhow::Context;
 use uuid::Uuid;
 
 use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
-pub use projection::{
-    AttributeMap, Location, Ordering, Pattern, Projection, Selection, VariableOr,
-};
+pub use projection::{AttributeMap, Location, Match, Ordering, Pattern, Projection, Selection};
 pub use types::{
-    Affinity, Assertable, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, RowIdOr,
+    Affinity, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, HasAffinity, RowIdOr,
     Value,
 };
 
@@ -159,7 +192,17 @@ impl Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Wraps a rusqlite transaction to provide this crate's semantics to sqlite.
+/// Wraps a [rusqlite::Transaction] to provide this crate's features.
+///
+/// Since this begins a transaction when initialized, you should remember to call
+/// [Session::commit] to finalize any effects.
+///
+/// (TODO that interface sucks; let callers pass in transactions.)
+///
+/// *Note!* Some important stuff is implemented on views which must be associated to the
+/// connection. It *should* be safe to create multiple [Session] objects (of the same
+/// version of this library) over one lifetime of one [rusqlite::Connection], but it may
+/// not be okay to use that connection for anything else.
 pub struct Session<'db> {
     tx: rusqlite::Transaction<'db>,
 }
@@ -230,6 +273,8 @@ impl<'db> Session<'db> {
         Ok(())
     }
 
+    /// Sets up a database with the state required to start asserting and finding
+    /// things.
     pub fn init_schema(db: &'db mut rusqlite::Connection) -> rusqlite::Result<()> {
         use rusqlite::params;
 
@@ -276,9 +321,11 @@ impl<'db> Session<'db> {
         Ok(())
     }
 
-    /// Run PRAGMA optimize;
+    /// Run `PRAGMA optimize;`. This is mostly for troubleshooting. This can improve
+    /// performance if the query planner is using the wrong indexes as a result of
+    /// inaccurate hints concerning them.
     ///
-    /// https://sqlite.org/lang_analyze.html
+    /// See <https://sqlite.org/lang_analyze.html>
     pub fn optimize(&self) -> rusqlite::Result<()> {
         let n = self
             .tx
@@ -287,6 +334,7 @@ impl<'db> Session<'db> {
         Ok(())
     }
 
+    /// Commit the transaction and close this [Session].
     pub fn commit(self) -> rusqlite::Result<()> {
         self.tx.commit()
     }
@@ -333,7 +381,11 @@ impl<'db> Session<'db> {
         Ok(Attribute { entity, ident })
     }
 
-    // todo implement for generic Assertable ToSql thing?
+    /// Makes a bunch of assertions about one entity.
+    ///
+    /// If the *:entity/uuid* attribute exists in the given map, then we add datoms
+    /// about that entity, otherwise, we create a new one.
+    // todo implement for generic HasAffinity ToSql thing?
     pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<Entity> {
         // application-level upsert so that we can get the rowid if the entity exists
         let entity = match obj.get(&ENTITY_UUID) {
@@ -355,6 +407,7 @@ impl<'db> Session<'db> {
         Ok(entity)
     }
 
+    /// Retracts a bunch of stuff about an entity, *:entity/uuid* must exist in the map.
     pub fn retract_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<usize> {
         let entity = match obj.get(&ENTITY_UUID) {
             Some(Value::Entity(name)) => name,
@@ -369,11 +422,12 @@ impl<'db> Session<'db> {
             })
     }
 
+    /// Insert a new datom that asserts the given entity-attribute-value tuple.
     pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
         E: RowIdOr<EntityId>,
         A: RowIdOr<AttributeName<'z>>,
-        T: Assertable + rusqlite::ToSql + fmt::Debug,
+        T: HasAffinity + rusqlite::ToSql + fmt::Debug,
     {
         self.check_protected_datom(e, a)?;
 
@@ -454,13 +508,12 @@ impl<'db> Session<'db> {
         }
     }
 
-    /// How should this even work?
-    /// - Should we find the datoms and then delete them by rowid?
+    /// Like [Session::assert] but the opposite.
     pub fn retract<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
     where
         E: RowIdOr<EntityId>,
         A: RowIdOr<AttributeName<'z>>,
-        T: Assertable + rusqlite::ToSql + fmt::Debug,
+        T: HasAffinity + rusqlite::ToSql + fmt::Debug,
     {
         self.check_protected_datom(e, a)?;
 
@@ -568,7 +621,7 @@ impl<'db> Session<'db> {
         }
     }
 
-    /// for debugging ... use with T as rusqlite::types::Value
+    /// For debugging ...
     pub fn all_datoms(
         &self,
     ) -> rusqlite::Result<Vec<(i64, String, Affinity, rusqlite::types::Value, i64)>> {
@@ -589,19 +642,23 @@ impl<'db> Session<'db> {
         rows.collect::<_>()
     }
 
-    /// TODO use trait for return type so the user can avoid double-vectorings and write things
-    /// that can read from column?
+    /// Run a [projection::Selection] and return a [Vec] of results. See the
+    /// [projection] module for fun times.
+    ///
+    /// TODO use trait for return type so the caller can avoid double-vectorings and write
+    /// things that can read from column?
     pub fn find<'s, 'p, V, S>(
         &self,
         s: &'s Selection<'s, 'p, V, S>,
     ) -> rusqlite::Result<Vec<<S as sql::ReadFromRow>::Out>>
     where
-        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
         S: sql::AddToQuery<&'s dyn sql::ToSqlDebug> + sql::ReadFromRow,
     {
         let mut q = sql::Query::default();
         let _ = sql::selection_sql(s, &mut q);
 
+        /* TODO XXX FIXME proper logging?????? */
         eprintln!("[DEBUG] sql: ...");
         eprintln!("{}", q.as_str());
         eprintln!("[DEBUG] par: {:?}", q.params());
@@ -621,7 +678,7 @@ impl<'db> Session<'db> {
         s: &'s Selection<'s, 'p, V, S>,
     ) -> rusqlite::Result<Explanation>
     where
-        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
         S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
     {
         let mut q = sql::Query::default();
@@ -644,7 +701,7 @@ impl<'db> Session<'db> {
         s: &'s Selection<'s, 'p, V, S>,
     ) -> rusqlite::Result<PlanExplanation>
     where
-        V: FromAffinityValue + Assertable + rusqlite::ToSql + fmt::Debug,
+        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
         S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
     {
         let mut q = sql::Query::default();
@@ -705,7 +762,7 @@ mod tests {
 
     #[test]
     fn attribute_sql() -> Result<()> {
-        use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+        use rusqlite::types::{FromSql, ToSql, ValueRef};
 
         let attr = AttributeName::from_static(":foo/bar");
         assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);

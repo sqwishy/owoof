@@ -11,16 +11,16 @@ pub struct Explanation {
 ///
 /// The indenting rules are:
 ///
-///     * For each "Next", "Prev", "VNext" or "VPrev" instruction, indent
-///       all opcodes that occur between the p2 jump destination and the opcode
-///       itself by 2 spaces.
+/// * For each "Next", "Prev", "VNext" or "VPrev" instruction, indent
+///   all opcodes that occur between the p2 jump destination and the opcode
+///   itself by 2 spaces.
 ///
-///     * For each "Goto", if the jump destination is earlier in the program
-///       and ends on one of:
-///          Yield  SeekGt  SeekLt  RowSetRead  Rewind
-///       or if the P1 parameter is one instead of zero,
-///       then indent all opcodes between the earlier instruction
-///       and "Goto" by 2 spaces.
+/// * For each "Goto", if the jump destination is earlier in the program
+///   and ends on one of:
+///      Yield  SeekGt  SeekLt  RowSetRead  Rewind
+///   or if the P1 parameter is one instead of zero,
+///   then indent all opcodes between the earlier instruction
+///   and "Goto" by 2 spaces.
 impl fmt::Display for Explanation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut indent = vec![];
@@ -62,8 +62,8 @@ pub struct ExplainLine {
     pub p1: i64,
     pub p2: i64,
     pub p3: i64,
-    pub p4: String,
-    pub p5: String,
+    pub p4: Option<String>,
+    pub p5: i64,
     pub comment: Option<String>,
 }
 
@@ -92,7 +92,7 @@ impl fmt::Display for ExplainLine {
             p1 = self.p1,
             p2 = self.p2,
             p3 = self.p3,
-            p4 = self.p4,
+            p4 = self.p4.as_ref().map(String::as_str).unwrap_or(""),
             p5 = self.p5,
             comment = self.comment.as_ref().map(String::as_str).unwrap_or(""),
         )

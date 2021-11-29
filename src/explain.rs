@@ -1,6 +1,30 @@
 use std::fmt;
 
-use crate::sql;
+use crate::{DontWoof, Select, TypeTag};
+use rusqlite::ToSql;
+
+impl<'tx> DontWoof<'tx> {
+    pub fn explain_plan<'n, V>(
+        &self,
+        select: &Select<'n, V>,
+    ) -> rusqlite::Result<PlanExplanation>
+    where
+        V: ToSql + TypeTag,
+    {
+        use crate::sql::{Query, QueryWriter};
+
+        let mut q = Query::default();
+
+        q.push_sql("EXPLAIN QUERY PLAN").push(select);
+
+        let mut stmt = self.tx.prepare(q.as_str())?;
+
+        let rows = stmt.query_map(q.params(), |row| PlanExplainLine::from_row(&row))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map(|lines| PlanExplanation { lines })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Explanation {
@@ -40,9 +64,11 @@ impl fmt::Display for Explanation {
                 op if next_codes.contains(&op) => indent
                     .get_mut(p2..e)
                     .map(|slice| slice.iter_mut().for_each(|i| *i = *i + 1)),
-                "Goto" if p2 < e && (yields.get(p2) == Some(&true) || line.p1 == 1) => indent
-                    .get_mut(p2..e)
-                    .map(|slice| slice.iter_mut().for_each(|i| *i = *i + 1)),
+                "Goto" if p2 < e && (yields.get(p2) == Some(&true) || line.p1 == 1) => {
+                    indent
+                        .get_mut(p2..e)
+                        .map(|slice| slice.iter_mut().for_each(|i| *i = *i + 1))
+                }
                 _ => None,
             };
         }
@@ -68,16 +94,16 @@ pub struct ExplainLine {
 }
 
 impl ExplainLine {
-    pub(crate) fn from_row_cursor(c: &mut sql::RowCursor) -> rusqlite::Result<Self> {
+    pub fn from_row(c: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(ExplainLine {
-            addr: c.get()?,
-            opcode: c.get()?,
-            p1: c.get()?,
-            p2: c.get()?,
-            p3: c.get()?,
-            p4: c.get()?,
-            p5: c.get()?,
-            comment: c.get()?,
+            addr: c.get(0)?,
+            opcode: c.get(1)?,
+            p1: c.get(2)?,
+            p2: c.get(3)?,
+            p3: c.get(4)?,
+            p4: c.get(5)?,
+            p5: c.get(6)?,
+            comment: c.get(7)?,
         })
     }
 }
@@ -144,12 +170,8 @@ pub struct PlanExplainLine {
 }
 
 impl PlanExplainLine {
-    pub(crate) fn from_row_cursor(c: &mut sql::RowCursor) -> rusqlite::Result<Self> {
-        Ok(PlanExplainLine {
-            id: c.get()?,
-            parent: c.get()?,
-            text: c.skip(1).get()?,
-        })
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(PlanExplainLine { id: row.get(0)?, parent: row.get(1)?, text: row.get(3)? })
     }
 }
 

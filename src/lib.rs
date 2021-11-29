@@ -1,35 +1,14 @@
-//! I have [a wordy post on my blog](https://froghat.ca/blag/dont-woof/) that talks a
-//! little bit about why this is and how it was designed. But it's very high-level and
-//! you shouldn't read that. This is terse and to-the-point; so read this instead.
+#![allow(unused)]
+//! owoof is about interacting with a SQLite-backed database using entity-attribute-value triples
+//! and pattern matching.
 //!
-//! ## How is this organized?
+//! It is inspired by Datomic and I wrote [a wordy post on my
+//! blog](https://froghat.ca/blag/dont-woof/) that explains some of the motivation.  Although, that
+//! post is about an earlier version of this library.
 //!
-//! - lib.rs (this file) defines a [`Session`] which wraps and owns an active database
-//!   transaction.  Can be used to [`Session::assert`] [`Session::retract`] or
-//!   [`Session::find`] data.  Probably a good starting point.
+//! ## tldr
 //!
-//! - [types] has a few things used to model the database and our "datoms", like
-//!   [`types::EntityId`], [`types::AttributeName`], and [`types::Value`].  These are used by
-//!   & designed for a `projection::Projection<types::Value>`.
-//!
-//! - [projection] contains a bunch of stuff for taking entity-attribute-value patterns
-//!   and selecting on them in order to find things in the database.  The
-//!   [`projection::Projection`] is pretty cool.
-//!
-//! - [explain] just has some implementation for running *EXPLAIN* and *EXPLAIN PLAN*
-//!   queries in SQLite.  Those are accessible through [`Session::explain`] &
-//!   [`Session::explain_plan`].
-//!
-//! - [sql] just has a bunch of SQL query string building stuff.
-//!
-//! ## Why & How?
-//!
-//! The point of the library is to interact with a SQLite-backed database using
-//! entity-attribute-value "datoms" and pattern matching.
-//!
-//! If you didn't read the blog post I linked above (I don't blame you), here's a tldr.
-//!
-//! Consider a database that looks like ...
+//! Consider a database of triplets that looks like ...
 //! ```ignore
 //! 100 :animal/name  "Cat"
 //! 100 :pet/name     "Garfield"
@@ -44,38 +23,38 @@
 //! ```ignore
 //! ?_ :pet/name ?_
 //! ```
-//! If we were to match datoms using this pattern, we'd be asking for datoms with: any
+//! If we were to match triplets using this pattern, we'd be asking for triplets with: any
 //! entity, for the *:pet/name* attribute, and any value. And we would get the following
-//! two datoms.
+//! two triplets.
 //! ```ignore
 //! 100 :pet/name    "Garfield"
 //! 101 :pet/name    "Odie"
 //! ```
-//! Those are the datoms that exist that match that pattern.
+//! Those are the triplets that exist that match that pattern.
 //!
-//! Now consider two patterns together ...
+//! Now consider this **pair** of patterns ...
 //! ```ignore
 //! ?a :pet/name     ?_
 //! ?a :animal/name  "Cat"
 //! ```
-//! The first pattern matches the set of two datoms from earlier.
-//! The second matches just:
+//! The **first** pattern matches the two triplets from earlier.
+//! But the **second** matches just:
 //! ```ignore
 //! 100 :animal/name "Cat"
 //! ```
-//! But we are *not* interested in *every* combination of datoms matched by both
-//! patterns.  So we related the patterns by constraining the *entity* to the same
-//! variable, *?a*.  This means that we only match the combinations of datoms between
-//! either set when they have the same entity.  So we end up with *one* result with
-//! *two* datoms.
+//! But, we are not interested in *every* combination of triplets in the sets that matched our
+//! patterns.  We related the patterns by constraining the *entity* to the same variable, *?a*.
+//! (This is often called unification.)  This means that we only match the combinations of triplets
+//! between sets when they share the same entity.  So we end up with *one* result with *two*
+//! triplets.
 //! ```ignore
 //! 100 :pet/name    "Garfield"
 //! 100 :animal/name "Cat"
 //! ```
 //!
 //! It's like if we were to say:
-//! > Match every datom having the attribute *:pet/name* with any value and for some any
-//! > entity named *?a*, match also datoms on the same entity *?a* having the attribute
+//! > Match every triplet having the attribute *:pet/name* with any value and for some any
+//! > entity named *?a*, match also triplets on the same entity *?a* having the attribute
 //! > *:animal/name* with the value "Cat".
 //!
 //! Another one might be:
@@ -84,759 +63,656 @@
 //! ?a :pet/human   ?p
 //! ?a :pet/name    ?pet
 //! ```
-//! Here, the variables *?human* and *?pet* don't relate datoms together, but they're
+//! Here, the variables *?human* and *?pet* don't relate triplets together, but they're
 //! there so we can refer to them when we want to get information out.
 //!
 //! These patterns are saying:
 //! > Given each entity *?a* having the *:pet/name* *?pet*
 //! >   and each entity *?p* having the *:person/name* *?person*,
-//! > match only combinations of these where there exists some datom *?a* *:pet/human*
+//! > match only combinations of these where there exists some triplet *?a* *:pet/human*
 //! > *?p*. That is, where *?a*'s human is *?p*.
 //!
-//! The point of this library/program is to allow us to use the above expression to
-//! pattern match on our database and read values by querying variables; like *?person*
-//! and *?pet* to get the two results:
+//! The point of owoof is to allow us to build a database of triplets and to use pattern matching
+//! to ask it questions and get values out -- like the values of *?person* and *?pet* in the above
+//! query:
 //! ```ignore
 //! "John Arbuckle" "Garfield"
 //! "John Arbuckle" "Odie"
 //! ```
 //!
-//! Check out the [projection] module for more fun documentation.
-#![allow(dead_code)]
-// ^^^ todo; get your shit together ^^^
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::needless_return)]
+//! Here's a kind of WIP example of the rust API corresponding to the patterns above:
+//!
+//! ```
+//! use owoof::{Network, ValueRef, AttributeRef};
+//!
+//! let mut network = Network::<ValueRef>::default();
+//!
+//! let (p, _, person) = network
+//!     .fluent_triples()
+//!     .match_attribute(AttributeRef::from_static(":person/name"))
+//!     .eav();
+//!
+//! let (a, _, _) = network
+//!     .fluent_triples()
+//!     .match_attribute(AttributeRef::from_static(":pet/human"))
+//!     .link_value(p)
+//!     .eav();
+//!
+//! let (a, _, pet) = network
+//!     .fluent_triples()
+//!     .match_attribute(AttributeRef::from_static(":pet/name"))
+//!     .eav();
+//!     
+//! // TODO finish this example with
+//! // owoof.do_meme(network.select().field(person).field(pet))?
+//! // or something
+//! ```
+//!
+//! Check out the [`network`] module for some memes ... TODO
+//!
+//! The [`DontWoof`] type is the main interface around talking to SQLite.
+use thiserror::Error;
 
+pub mod driver;
+#[cfg(feature = "explain")]
 pub mod explain;
-pub mod projection;
+pub mod network;
+pub mod select;
+pub mod soup;
 pub mod sql;
+// pub mod sync;
 pub mod types;
 
-use std::collections::HashMap;
-use std::fmt;
+use rusqlite::hooks::Action;
+use rusqlite::{OptionalExtension, ToSql};
 
-use uuid::Uuid;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use explain::{ExplainLine, Explanation, PlanExplainLine, PlanExplanation};
-pub use projection::{AttributeMap, Location, Match, Ordering, Pattern, Projection, Selection};
-pub use types::{
-    Affinity, Attribute, AttributeName, Entity, EntityId, FromAffinityValue, HasAffinity, RowIdOr,
-    Value,
-};
+pub use network::{GenericNetwork, Network, OwnedNetwork};
+pub use select::Select;
+pub use soup::Encoded;
+use types::TypeTag;
+pub use types::{Attribute, AttributeRef, Entity, Value, ValueRef};
 
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
 
-/// Hard coded entity row ID for attribute of the identifier "entity/uuid" ...
-pub(crate) const ENTITY_UUID_ROWID: i64 = -1;
-/// Hard coded entity row ID for attribute of the identifier "attr/ident" ...
-/// This is referenced _literally_ in the "attributes" database view.
-pub(crate) const ATTR_IDENT_ROWID: i64 = -2;
-/// Hard coded entity row ID for attribute of the identifier "attr/unique" ...
-pub(crate) const ATTR_UNIQUE_ROWID: i64 = -3;
-
-pub(crate) static ENTITY_UUID: AttributeName = AttributeName::from_static_unchecked(":entity/uuid");
-pub(crate) static ATTR_UNIQUE: AttributeName = AttributeName::from_static_unchecked(":attr/unique");
-
-pub(crate) const T_ENTITY: i64 = -1;
-/// This is referenced _literally_ in the "attributes" database view.
-pub(crate) const T_ATTRIBUTE: i64 = -2;
-
-/// https://sqlite.org/rescode.html#extrc
-const SQLITE_CONSTRAINT_TRIGGER: i32 = 1811;
-const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
-
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[error("attribute must be unique for the entity")]
-    NotUniqueForEntity,
-    #[error("value must be unique for the attribute")]
-    NotUniqueForAttribute,
-    #[error("invalid object: {0}")]
-    InvalidObject(&'static str),
-    #[error("{0} is immutable")]
-    Immutable(&'static str),
-    #[error("this value is protected from modification")]
-    Protected,
-    #[error("could not retract what doesn't exist")]
-    NotFound,
     #[error("sql error")]
     Sql(#[from] rusqlite::Error),
 }
 
-impl Error {
-    fn promote_rusqlite(e: rusqlite::Error) -> Self {
-        match &e {
-            rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error {
-                    code: rusqlite::ffi::ErrorCode::ConstraintViolation,
-                    extended_code,
-                },
-                Some(msg),
-            ) => match (extended_code, msg.as_str()) {
-                (&SQLITE_CONSTRAINT_TRIGGER, ":entity/id is immutable") => {
-                    Error::Immutable(":entity/id")
-                }
-                (
-                    &SQLITE_CONSTRAINT_UNIQUE,
-                    "UNIQUE constraint failed: datoms.a, datoms.t, datoms.v",
-                ) => Error::NotUniqueForAttribute,
-                (&SQLITE_CONSTRAINT_UNIQUE, "UNIQUE constraint failed: datoms.e, datoms.a") => {
-                    Error::NotUniqueForEntity
-                }
-                _ => e.into(),
-            },
-            _ => e.into(),
-        }
-    }
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+type Change = (Action, i64);
+
+#[derive(Debug)]
+pub struct DontWoof<'tx> {
+    tx: HookedTransaction<'tx>,
+    changes: Arc<Mutex<Vec<Change>>>,
+    changes_swap: RefCell<Vec<Change>>,
+    changes_failed: Arc<AtomicBool>,
 }
 
-type Result<T, E = Error> = std::result::Result<T, E>;
-
-/// Wraps a [rusqlite::Transaction] to provide this crate's features.
-///
-/// Since this begins a transaction when initialized, you should remember to call
-/// [Session::commit] to finalize any effects.
-///
-/// (TODO that interface sucks; let callers pass in transactions.)
-///
-/// *Note!* Some important stuff is implemented on views which must be associated to the
-/// connection. It *should* be safe to create multiple [Session] objects (of the same
-/// version of this library) over one lifetime of one [rusqlite::Connection], but it may
-/// not be okay to use that connection for anything else.
-pub struct Session<'db> {
-    tx: rusqlite::Transaction<'db>,
-}
-
-impl<'db> Session<'db> {
-    pub fn new(db: &'db mut rusqlite::Connection) -> rusqlite::Result<Self> {
-        let mut tx = db.transaction()?;
-        Self::setup_views(&mut tx)?;
-        Ok(Session { tx })
-    }
-
-    /// Views are attached to the lifetime of the connection, not the transaction ...
-    /// ... so guard with IF NOT EXISTS.
-    fn setup_views(db: &mut rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
-        /* attributes view */
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY VIEW IF NOT EXISTS
-                    attributes (rowid, ident)
-                 AS SELECT e, v FROM datoms WHERE a = {} AND t = {}",
-                ATTR_IDENT_ROWID, T_ATTRIBUTE,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        /* attr_unique view */
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY VIEW IF NOT EXISTS
-                    attr_unique (rowid, v)
-                 AS SELECT e, v FROM datoms WHERE a = {}",
-                ATTR_UNIQUE_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        /* :entity/id datoms */
-
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS create_entity_uuid_datoms
-                AFTER INSERT ON entities
-                   FOR EACH ROW
-                BEGIN
-                    INSERT INTO datoms (e, a, t, v) VALUES (new.rowid, {}, {}, new.rowid);
-                END",
-                ENTITY_UUID_ROWID, T_ENTITY
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        /* TODO I don't know that this ever happens,
-         * we don't write queries that would do this, right? */
-        db.execute(
-            &format!(
-                "CREATE TEMPORARY TRIGGER
-                  IF NOT EXISTS immutable_entity_uuid_datoms
-                BEFORE UPDATE ON entities
-                    FOR EACH ROW WHEN new.a = {ENTITY_UUID_ROWID}
-                BEGIN SELECT RAISE(FAIL, ':entity/id is immutable');
-                END",
-                ENTITY_UUID_ROWID = ENTITY_UUID_ROWID,
-            ),
-            rusqlite::NO_PARAMS,
-        )?;
-
-        Ok(())
-    }
-
-    /// Sets up a database with the state required to start asserting and finding
-    /// things.
-    pub fn init_schema(db: &'db mut rusqlite::Connection) -> rusqlite::Result<()> {
-        use rusqlite::params;
-
-        let mut tx = db.transaction()?;
-        tx.execute_batch(SCHEMA)?;
-
-        Self::setup_views(&mut tx)?;
-
-        // Create the initial attributes, this isn't part of SCHEMA because sqlite can't make its
-        // own UUIDs (unless we just use random 128 bit blobs ...) and I'm avoiding database
-        // functions for now.
-
-        for (ent_rowid, ident) in &[
-            (ENTITY_UUID_ROWID, "entity/uuid"),
-            (ATTR_IDENT_ROWID, "attr/ident"),
-            (ATTR_UNIQUE_ROWID, "attr/unique"),
-        ] {
-            let p = params![ent_rowid, Uuid::new_v4()];
-            tx.execute("INSERT INTO entities (rowid, uuid) VALUES (?, ?)", p)
-                .map(|n| assert_eq!(n, 1))?;
-
-            let p = params![ent_rowid, ATTR_IDENT_ROWID, T_ATTRIBUTE, ident];
-            tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
-                .map(|n| assert_eq!(n, 1))?;
-        }
-
-        // assert :attr/ident :attr/unique true
-        let p = params![ATTR_IDENT_ROWID, ATTR_UNIQUE_ROWID, 0, true];
-        tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
-            .map(|n| assert_eq!(n, 1))?;
-
-        // assert :entity/uuid :attr/unique true
-        let p = params![ENTITY_UUID_ROWID, ATTR_UNIQUE_ROWID, 0, true];
-        tx.execute("INSERT INTO datoms (e, a, t, v) VALUES (?, ?, ?, ?)", p)
-            .map(|n| assert_eq!(n, 1))?;
-
-        tx.execute(
-            "UPDATE datoms SET unique_for_attribute = 1 WHERE a = ? OR a = ?",
-            params![ATTR_IDENT_ROWID, ENTITY_UUID_ROWID],
-        )?;
-
-        tx.commit()?;
-
-        Ok(())
-    }
-
-    /// Run `PRAGMA optimize;`. This is mostly for troubleshooting. This can improve
-    /// performance if the query planner is using the wrong indexes as a result of
-    /// inaccurate hints concerning them.
+impl<'tx> DontWoof<'tx> {
+    /// Look up an attribute by its identifier.
     ///
-    /// See <https://sqlite.org/lang_analyze.html>
-    pub fn optimize(&self) -> rusqlite::Result<()> {
-        let n = self
-            .tx
-            .execute("SELECT * FROM pragma_optimize()", rusqlite::NO_PARAMS)?;
-        assert_eq!(n, 1);
-        Ok(())
+    /// In other words, find ?e given ?a where ?e :db/attribute ?a.
+    pub fn attribute<'a, A: Into<AttributeRef<'a>>>(
+        &self,
+        a: Encoded<A>,
+    ) -> Result<Encoded<Entity>> {
+        let sql = r#"SELECT rowid FROM "attributes" WHERE ident = ?"#;
+        self.tx
+            .query_row(sql, &[&a.rowid], |row| row.get::<_, i64>(0))
+            // .optional()
+            .map(Encoded::from_rowid)
+            .map_err(Error::from)
     }
 
-    /// Commit the transaction and close this [Session].
-    pub fn commit(self) -> rusqlite::Result<()> {
-        self.tx.commit()
-    }
-
-    pub fn new_entity(&self) -> rusqlite::Result<Entity> {
-        let uuid = uuid::Uuid::new_v4();
-        self.new_entity_at(EntityId::from(uuid))
-    }
-
-    pub fn new_entity_at(&self, id: EntityId) -> rusqlite::Result<Entity> {
+    pub fn new_entity(&self) -> Result<Encoded<Entity>> {
         let n = self.tx.execute(
-            "INSERT INTO entities (uuid) VALUES (?)",
-            rusqlite::params![id],
+            r#"INSERT INTO "soup" (t, v) VALUES (?, randomblob(16))"#,
+            rusqlite::params![types::ENTITY_ID_TAG],
         )?;
         assert_eq!(n, 1);
         let rowid = self.tx.last_insert_rowid();
-        Ok(Entity { rowid, id })
+        Ok(Encoded::from_rowid(rowid))
     }
 
-    pub(crate) fn find_entity(&self, id: EntityId) -> rusqlite::Result<Option<Entity>> {
-        use rusqlite::OptionalExtension;
-        self.tx
-            .query_row(
-                "SELECT rowid FROM entities WHERE uuid = ?",
-                rusqlite::params![id],
-                |row| row.get(0),
-            )
+    pub fn fluent_entity(&self) -> Result<FluentEntity> {
+        let e = self.new_entity()?;
+        Ok(FluentEntity { woof: self, e })
+    }
+
+    pub fn encode<V: TypeTag + ToSql>(&self, val: V) -> Result<Encoded<V>> {
+        let rowid: i64 = self._encode(val.type_tag(), &val as &dyn ToSql)?;
+        Ok(Encoded::from_rowid(rowid))
+    }
+
+    fn _encode(&self, tag: i64, val: &dyn ToSql) -> Result<i64> {
+        let params = rusqlite::params![tag, val];
+
+        /* some brief testing suggests this is faster than INSERT ON CONFLICT RETURNING */
+
+        let select = r#"SELECT rowid
+                          FROM "soup"
+                         WHERE t = ?
+                           AND v = ?"#;
+        let rowid = match self
+            .tx
+            .query_row(select, params, |row| row.get::<_, i64>(0))
             .optional()?
-            .map(|rowid| Ok(Entity { rowid, id }))
-            .transpose()
-    }
-
-    pub fn new_attribute<'a, S>(&self, ident: S) -> Result<Attribute<'a>>
-    where
-        S: Into<AttributeName<'a>>,
-    {
-        let ident: AttributeName = ident.into();
-
-        let entity = self.new_entity()?;
-
-        use types::RowId;
-        self.assert(&entity, &RowId(ATTR_IDENT_ROWID), &ident)?;
-
-        Ok(Attribute { entity, ident })
-    }
-
-    /// Makes a bunch of assertions about one entity.
-    ///
-    /// If the *:entity/uuid* attribute exists in the given map, then we add datoms
-    /// about that entity, otherwise, we create a new one.
-    // todo implement for generic HasAffinity ToSql thing?
-    pub fn assert_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<Entity> {
-        // application-level upsert so that we can get the rowid if the entity exists
-        let entity = match obj.get(&ENTITY_UUID) {
-            Some(Value::Entity(name)) => match self.find_entity(*name)? {
-                Some(entity) => entity,
-                None => self.new_entity_at(*name)?,
-            },
-            Some(_) => Err(Error::InvalidObject("expected uuid for :entity/uuid"))?,
-            None => self.new_entity()?,
-        };
-
-        for (a, v) in obj.iter() {
-            if a == &ENTITY_UUID {
-                continue;
+        {
+            Some(rowid) => rowid,
+            None => {
+                let insert = r#"INSERT INTO "soup" (t, v) VALUES (?, ?)"#;
+                let n = self.tx.execute(insert, params)?;
+                assert_eq!(n, 1);
+                self.tx.last_insert_rowid()
             }
-            self.assert(&entity, a, v)?;
-        }
-
-        Ok(entity)
-    }
-
-    /// Retracts a bunch of stuff about an entity, *:entity/uuid* must exist in the map.
-    pub fn retract_obj(&self, obj: &HashMap<AttributeName, Value>) -> Result<usize> {
-        let entity = match obj.get(&ENTITY_UUID) {
-            Some(Value::Entity(name)) => name,
-            Some(_) => Err(Error::InvalidObject("expected uuid for :entity/uuid"))?,
-            None => Err(Error::InvalidObject(":entity/uuid missing in retraction"))?,
         };
 
-        obj.iter()
-            .filter(|(a, _)| *a != &ENTITY_UUID)
-            .try_fold(0usize, |mut sum, (a, v)| {
-                self.retract(entity, a, v).map(|_| sum += 1).map(|_| sum)
+        Ok(rowid)
+    }
+
+    pub fn assert<V: TypeTag>(
+        &self,
+        e: Encoded<Entity>,
+        a: Encoded<Entity>,
+        v: Encoded<V>,
+    ) -> Result<()> {
+        /* triples is WITHOUT ROWID so don't try to read the last rowid after an insert */
+        let n = self.tx.execute(
+            r#"INSERT INTO "triples" (e,a,v) VALUES (?, ?, ?)"#,
+            &[&e.rowid, &a.rowid, &v.rowid],
+        )?;
+        assert_eq!(n, 1);
+
+        /* This kind of sucks because it's a super rare event but requires accessing a RefCell
+         * and unlocking a Mutex.  Using an AtomicBool to flag buffer emptiness allow an early exit
+         * doesn't improve performance much (~8ms down to ~6ms) and overall this check is ~less
+         * than %1 of an import.  So it's not worth worrying about this too much. */
+        self._update_attribute_indexes()?;
+
+        Ok(())
+    }
+
+    fn _update_attribute_indexes(&self) -> rusqlite::Result<()> {
+        /* Since Connection is Send, this can fail to lock.  And we don't have a way to recover and
+         * try again if that happens.  For now, there should be a big warning about this in the
+         * API.  TODO XXX FIXME */
+        if let Ok(mut swap) = self.changes_swap.try_borrow_mut() {
+            debug_assert!(swap.is_empty());
+            if let Ok(ref mut mutex) = self.changes.try_lock() {
+                if mutex.is_empty() {
+                    return Ok(());
+                }
+                std::mem::swap::<Vec<Change>>(mutex.as_mut(), swap.as_mut());
+            } else {
+                debug_assert!(false, "failed to lock changes");
+                self.changes_failed.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+
+            let result = self._execute_attribute_index_changes(swap.as_slice());
+
+            swap.clear();
+
+            /* If this is Err(_), don't set self.changes_failed, that refers to synchronization
+             * issues.  This is a rusqlite query failure or whatever. */
+            result.map(drop)
+        } else {
+            debug_assert!(false, "failed to borrow changes_swap");
+            self.changes_failed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn _execute_attribute_index_changes(&self, swap: &[Change]) -> rusqlite::Result<()> {
+        swap.iter()
+            .filter_map(|(action, rowid)| match action {
+                Action::SQLITE_INSERT => Some(format!(
+                    r#"CREATE INDEX "triples-ave-{rowid}" ON "triples" (v, e) WHERE a = {rowid}"#,
+                    rowid = rowid
+                )),
+                Action::SQLITE_DELETE => Some(format!(
+                    r#"DROP INDEX "triples-ave-{rowid}""#,
+                    rowid = rowid
+                )),
+                _ => None,
             })
+            .try_for_each(|sql| self.tx.execute(&sql, []).map(drop))
     }
 
-    /// Insert a new datom that asserts the given entity-attribute-value tuple.
-    pub fn assert<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
-    where
-        E: RowIdOr<EntityId>,
-        A: RowIdOr<AttributeName<'z>>,
-        T: HasAffinity + rusqlite::ToSql + fmt::Debug,
-    {
-        self.check_protected_datom(e, a)?;
-
-        let e_variant = e.row_id_or();
-        let a_variant = a.row_id_or();
-        let v_affinity = v.affinity();
-
-        /* If we're setting the :attr/unique attribute on some entity,
-         * denormalize the new value to the unique_for_attribute column in datoms.
-         *
-         * This is done instead of a SQL trigger for performance reasons.
-         * It appears as if having ANY triggers on a table does some slow-path to happen.
-         * For example:
-         *
-         *       CREATE TRIGGER asdf
-         *     BEFORE INSERT ON datoms
-         *                 WHEN false
-         *                BEGIN select 0; END;
-         *
-         * ... causes population of a test database to take ~180ms from ~130ms. */
-        match a_variant.as_ref() {
-            either::Left(&rowid) if rowid == ATTR_UNIQUE_ROWID => {
-                self.set_datoms_unique_for_attribute(e, true)?;
-            }
-            either::Right(&a) if a == &ATTR_UNIQUE => {
-                self.set_datoms_unique_for_attribute(e, true)?;
-            }
-            _ => (),
-        };
-
-        let (e, e_bind_str) = match e_variant.as_ref() {
-            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
-            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
-        };
-
-        let (a, a_bind_str) = match a_variant.as_ref() {
-            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
-            either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
-        };
-
-        let (t, v_bind_str) = v_affinity.t_and_bind();
-
-        let sql = format!(
-            r#"
-        WITH yooneek AS (SELECT v FROM attr_unique WHERE rowid = {a} LIMIT 1)
-        INSERT INTO datoms (e, a, t, v, unique_for_attribute)
-             VALUES ( {e}
-                    , {a}
-                    , ?
-                    , {v}
-                    , ifnull((SELECT v FROM yooneek), false) )"#,
-            e = e_bind_str,
-            a = a_bind_str,
-            v = v_bind_str,
-        );
-        // eprintln!("[DEBUG] sql: ...");
-        // eprintln!("{}", sql);
-        // eprintln!(
-        //     "[DEBUG] par: {:?} {:?} {:?} {:?} {:?}",
-        //     a.to_sql(),
-        //     e.to_sql(),
-        //     a.to_sql(),
-        //     t,
-        //     v,
-        // );
-
-        let mut stmt = self.tx.prepare(&sql)?;
-        match stmt.execute(&[
-            a as &dyn rusqlite::ToSql,
-            e as &dyn rusqlite::ToSql,
-            a as &dyn rusqlite::ToSql,
-            t as &dyn rusqlite::ToSql,
-            v,
-        ]) {
-            // Ok(0) => todo!("something about an upsert?"),
-            Ok(n) => Ok(assert_eq!(n, 1)),
-            Err(e) => Err(Error::promote_rusqlite(e)),
-        }
-    }
-
-    /// Like [Session::assert] but the opposite.
-    pub fn retract<'z, E, A, T>(&self, e: &E, a: &A, v: &T) -> Result<()>
-    where
-        E: RowIdOr<EntityId>,
-        A: RowIdOr<AttributeName<'z>>,
-        T: HasAffinity + rusqlite::ToSql + fmt::Debug,
-    {
-        self.check_protected_datom(e, a)?;
-
-        let e_variant = e.row_id_or();
-        let a_variant = a.row_id_or();
-        let v_affinity = v.affinity();
-
-        /* denormalize modification of :attr/unique to datoms.unique_for_attribute
-         * (see assert() for more) */
-        match a_variant.as_ref() {
-            either::Left(&rowid) if rowid == ATTR_UNIQUE_ROWID => {
-                self.set_datoms_unique_for_attribute(e, false)?;
-            }
-            either::Right(&a) if a == &ATTR_UNIQUE => {
-                self.set_datoms_unique_for_attribute(e, false)?;
-            }
-            _ => (),
-        };
-
-        let (e, e_bind_str) = match e_variant.as_ref() {
-            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
-            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
-        };
-
-        let (a, a_bind_str) = match a_variant.as_ref() {
-            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
-            either::Right(a) => (a as &dyn rusqlite::ToSql, sql::bind_attribute()),
-        };
-
-        let (t, v_bind_str) = v_affinity.t_and_bind();
-
-        let sql = format!(
-            r#"
-        DELETE FROM datoms
-              WHERE e={e}
-                AND a={a}
-                AND t=?
-                AND v={v}"#,
-            e = e_bind_str,
-            a = a_bind_str,
-            v = v_bind_str,
-        );
-
-        let mut stmt = self.tx.prepare(&sql)?;
-        match stmt.execute(&[
-            e as &dyn rusqlite::ToSql,
-            a as &dyn rusqlite::ToSql,
-            t as &dyn rusqlite::ToSql,
-            v,
-        ]) {
-            Ok(0) => Err(Error::NotFound),
-            Ok(n) => Ok(assert_eq!(n, 1)),
-            Err(e) => Err(Error::promote_rusqlite(e)),
-        }
-    }
-
-    fn check_protected_datom<'z, E, A>(&self, e: &E, a: &A) -> Result<()>
-    where
-        E: RowIdOr<EntityId>,
-        A: RowIdOr<AttributeName<'z>>,
-    {
-        let e_variant = e.row_id_or();
-        let a_variant = a.row_id_or();
-
-        match (e_variant, a_variant) {
-            /* enforce immutability of datoms with :entity/uuid attributes */
-            (_, either::Left(rowid)) if rowid == ENTITY_UUID_ROWID => {
-                return Err(Error::Immutable(":entity/uuid"))
-            }
-            (_, either::Right(a)) if a == &ENTITY_UUID => {
-                return Err(Error::Immutable(":entity/uuid")); /* rustfmt plz no */
-            }
-            // TODO we can't properly prohibit modification of special datoms like entity/uuid
-            // unless we know what uuid it has ahead of time?
-            // (e, a) if a == &ATTR_UNIQUE => {
-            //     return Err(Error::Protected)
-            // }
-            _ => return Ok(()),
-        }
-    }
-
-    fn set_datoms_unique_for_attribute<E>(&self, e: &E, v: bool) -> Result<usize>
-    where
-        E: RowIdOr<EntityId>,
-    {
-        let e_variant = e.row_id_or();
-
-        let (e, e_bind_str) = match e_variant.as_ref() {
-            either::Left(rowid) => (rowid as &dyn rusqlite::ToSql, "?"),
-            either::Right(e) => (e as &dyn rusqlite::ToSql, sql::bind_entity()),
-        };
-
-        let sql = format!(
-            r#"
-             UPDATE datoms
-                SET unique_for_attribute = ?
-              WHERE datoms.a = {e};"#,
-            e = e_bind_str,
-        );
-        let params = rusqlite::params![v, e];
-        let mut stmt = self.tx.prepare(&sql)?;
-        match stmt.execute(params) {
-            Ok(n) => Ok(n),
-            Err(e) => Err(Error::promote_rusqlite(e)),
-        }
-    }
-
-    /// For debugging ...
-    pub fn all_datoms(
-        &self,
-    ) -> rusqlite::Result<Vec<(i64, String, Affinity, rusqlite::types::Value, i64)>> {
-        let sql = r#"
-            SELECT e, attributes.ident, t, v, unique_for_attribute
-              FROM datoms
-              JOIN attributes ON datoms.a = attributes.rowid"#;
-        let mut stmt = self.tx.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::NO_PARAMS, |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })?;
-        rows.collect::<_>()
-    }
-
-    /// Run a [projection::Selection] and return a [Vec] of results. See the
-    /// [projection] module for fun times.
+    /// Run `PRAGMA optimize;`.
     ///
-    /// TODO use trait for return type so the caller can avoid double-vectorings and write
-    /// things that can read from column?
-    pub fn find<'s, 'p, V, S>(
-        &self,
-        s: &'s Selection<'s, 'p, V, S>,
-    ) -> rusqlite::Result<Vec<<S as sql::ReadFromRow>::Out>>
-    where
-        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
-        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug> + sql::ReadFromRow,
-    {
-        let mut q = sql::Query::default();
-        let _ = sql::selection_sql(s, &mut q);
-
-        /* TODO XXX FIXME proper logging?????? */
-        eprintln!("[DEBUG] sql: ...");
-        eprintln!("{}", q.as_str());
-        eprintln!("[DEBUG] par: {:?}", q.params());
-
-        let mut stmt = self.tx.prepare(q.as_str())?;
-
-        let rows = stmt.query_map(q.params(), |row| {
-            let mut c = sql::RowCursor::from(row);
-            s.columns.read_from_row(&mut c)
-        })?;
-
-        rows.collect()
+    /// This is mostly for troubleshooting but may change performance by updating index statistics
+    /// used by the query planner.
+    ///
+    /// See <https://sqlite.org/lang_analyze.html>
+    pub fn optimize(&self) -> rusqlite::Result<()> {
+        let n = self.tx.execute("SELECT * FROM pragma_optimize()", [])?;
+        assert_eq!(n, 1);
+        Ok(())
     }
 
-    pub fn explain<'s, 'p, V, S>(
-        &self,
-        s: &'s Selection<'s, 'p, V, S>,
-    ) -> rusqlite::Result<Explanation>
+    pub fn prefetch_attributes<V>(&self, network: &mut Network<V>) -> Result<()>
     where
-        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
-        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
+        V: TypeTag + ToSql + std::fmt::Debug,
     {
-        let mut q = sql::Query::default();
-        let _ = sql::selection_sql(s, &mut q);
+        use crate::network::{Constraint, Field, Match};
 
-        let sql = format!("EXPLAIN\n{}", q);
-        let mut stmt = self.tx.prepare(&sql)?;
+        network
+            .constraints_mut()
+            .iter_mut()
+            .try_for_each(|constraint| match constraint {
+                &mut Constraint::Eq { lh, rh: Match::Value(ref v) }
+                    if lh.field() == Field::Attribute =>
+                {
+                    let mut stmt = self.tx.prepare_cached(
+                        r#"
+                    SELECT a.rowid
+                      FROM attributes a
+                      JOIN soup s ON a.ident = s.rowid
+                     WHERE s.t = ? AND s.v = ?
+                     LIMIT 1
+                    "#,
+                    )?;
+                    let type_tag = v.type_tag();
+                    let rh = stmt
+                        .query_row(rusqlite::params![type_tag, v], |row| row.get(0))
+                        .map(Encoded::from_rowid)
+                        .map(Match::Encoded)
+                        .optional()?;
+                    // If a lookup failed, the query probably won't succeed, but whatever ...
+                    if let Some(rh) = rh {
+                        *constraint = Constraint::Eq { lh, rh };
+                    }
+                    Ok(())
+                }
+                _ => Result::<(), Error>::Ok(()),
+            })?;
 
-        let rows = stmt.query_map(q.params(), |row| {
-            let mut c = sql::RowCursor::from(row);
-            ExplainLine::from_row_cursor(&mut c)
-        })?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map(|lines| Explanation { lines })
+        Ok(())
     }
 
-    pub fn explain_plan<'s, 'p, V, S>(
-        &self,
-        s: &'s Selection<'s, 'p, V, S>,
-    ) -> rusqlite::Result<PlanExplanation>
+    pub fn into_tx(self) -> rusqlite::Transaction<'tx> {
+        // TODO XXX FIXME
+        // use std::mem::MaybeUninit;
+        // MaybeUninit::new(self.tx);
+        // let tx: rusqlite::Transaction = unsafe {
+        //     let mut garbage = MaybeUninit::uninit();
+        //     swap(&mut self.tx, &mut *garbage.as_mut_ptr());
+        //     garbage.assume_init()
+        // };
+        // Self::_unhook(&tx);
+        // tx
+        self.tx.unwrap()
+    }
+}
+
+#[derive(Debug)]
+struct HookedTransaction<'tx>(Option<rusqlite::Transaction<'tx>>);
+
+impl<'tx> std::ops::Deref for HookedTransaction<'tx> {
+    type Target = rusqlite::Transaction<'tx>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl<'tx> HookedTransaction<'tx> {
+    fn new<F>(tx: rusqlite::Transaction<'tx>, hook: F) -> Self
     where
-        V: FromAffinityValue + HasAffinity + rusqlite::ToSql + fmt::Debug,
-        S: sql::AddToQuery<&'s dyn sql::ToSqlDebug>,
+        F: FnMut(Action, &str, &str, i64) + Send,
     {
-        let mut q = sql::Query::default();
-        let _ = sql::selection_sql(s, &mut q);
+        tx.update_hook(Some(hook));
+        HookedTransaction(Some(tx))
+    }
 
-        let sql = format!("EXPLAIN QUERY PLAN\n{}", q);
-        let mut stmt = self.tx.prepare(&sql)?;
+    fn unwrap(mut self) -> rusqlite::Transaction<'tx> {
+        let tx = self.0.take().unwrap();
+        HookedTransaction::_unhook(&tx);
+        tx
+    }
 
-        let rows = stmt.query_map(q.params(), |row| {
-            let mut c = sql::RowCursor::from(row);
-            PlanExplainLine::from_row_cursor(&mut c)
-        })?;
+    fn _unhook(db: &rusqlite::Connection) {
+        let no_hook = None::<fn(_: Action, _: &str, _: &str, _: i64)>;
+        db.update_hook(no_hook);
+    }
+}
 
-        rows.collect::<Result<Vec<_>, _>>()
-            .map(|lines| PlanExplanation { lines })
+impl<'tx> Drop for HookedTransaction<'tx> {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            HookedTransaction::_unhook(&tx);
+        }
+    }
+}
+
+impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
+    fn from(tx: rusqlite::Transaction<'tx>) -> Self {
+        /* irc this must be Send because this hook is placed on the Connnection which can be shared
+         * by multiple threads.  So Arc and other Send-able primitives are required instead of
+         * their !Send counterparts.  */
+        let changes = Arc::new(Mutex::new(Vec::<Change>::default()));
+        let changes_failed = Arc::new(AtomicBool::new(false));
+
+        /* We have to be careful here, the borrow checker doesn't know that this function must be
+         * valid after calling update_hook().  We use `move` to make sure we don't borrow anything
+         * that will be dropped in this scope ... */
+        let hook = {
+            let changes = Arc::clone(&changes);
+            let changes_failed = Arc::clone(&changes_failed);
+            move |action: Action, _database: &str, table: &str, rowid: i64| {
+                if table == "attributes" {
+                    if let Ok(ref mut mutex) = changes.try_lock() {
+                        mutex.push((action, rowid));
+                    } else {
+                        changes_failed.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        };
+
+        DontWoof {
+            tx: HookedTransaction::new(tx, hook),
+            changes,
+            changes_swap: RefCell::new(Vec::<Change>::default()),
+            changes_failed,
+        }
+    }
+}
+
+impl<'tx> std::ops::Deref for DontWoof<'tx> {
+    type Target = rusqlite::Transaction<'tx>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+/// ???
+pub struct FluentEntity<'w, 'tx> {
+    woof: &'w DontWoof<'tx>,
+    e: Encoded<Entity>,
+}
+
+impl FluentEntity<'_, '_> {
+    pub fn assert<V: TypeTag>(&self, a: Encoded<Entity>, v: Encoded<V>) -> Result<&Self> {
+        self.woof.assert(self.e, a, v)?;
+        Ok(self)
+    }
+}
+
+impl From<&FluentEntity<'_, '_>> for Encoded<Entity> {
+    fn from(fl: &FluentEntity) -> Self {
+        fl.e
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
+    use anyhow::Context;
+
+    fn rusqlite_in_memory() -> Result<rusqlite::Connection> {
+        let mut db = rusqlite::Connection::open_in_memory()?;
+        {
+            let mut tx = db.transaction()?;
+            tx.execute_batch(SCHEMA)?;
+            tx.commit()?;
+        }
+        Ok(db)
+    }
 
     #[test]
-    fn deserialization() -> Result<()> {
-        use serde::{de::value::Error, de::IntoDeserializer, Deserialize};
+    fn test() -> anyhow::Result<()> {
+        let mut db = rusqlite_in_memory()?;
+        let mut tx = db.transaction()?;
+        let woof = DontWoof::from(tx);
 
-        assert_eq!(
-            value_from("#03b48f17-7f0a-455f-af1d-ba946f762090")?,
-            Value::Entity(
-                "03b48f17-7f0a-455f-af1d-ba946f762090"
-                    .parse::<uuid::Uuid>()
-                    .map(EntityId::from)
-                    .unwrap()
-            )
-        );
+        let db_attr = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
 
-        assert_eq!(
-            value_from(":entity/uuid")?,
-            Value::Attribute(":entity/uuid".to_owned())
-        );
+        let pet_name = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":pet/name".parse::<Attribute>()?)?)?
+            .into();
 
-        assert_eq!(
-            value_from("anything else")?,
-            Value::Text("anything else".to_owned())
-        );
+        let animal_name: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":animal/name".parse::<Attribute>()?)?)?
+            .into();
 
-        fn value_from<T>(t: T) -> Result<Value, Error>
-        where
-            for<'de> T: IntoDeserializer<'de>,
-        {
-            let wat = IntoDeserializer::<Error>::into_deserializer(t);
-            Value::deserialize(wat)
-        }
+        let garfield: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(pet_name, woof.encode(ValueRef::from("Garfield"))?)?
+            .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
+            .into();
 
         Ok(())
     }
 
     #[test]
-    fn attribute_sql() -> Result<()> {
-        use rusqlite::types::{FromSql, ToSql, ValueRef};
+    fn test_books() -> anyhow::Result<()> {
+        let mut db = rusqlite::Connection::open("/tmp/owoof-test.sqlite")?;
+        let mut tx = db.transaction()?;
+        let mut woof = DontWoof::from(tx);
+        // woof.execute_batch(SCHEMA)?;
+        // import_books(&woof)?;
+        // woof.into_tx().commit()?;
 
-        let attr = AttributeName::from_static(":foo/bar");
-        assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);
+        // return Ok(());
 
-        let v = ValueRef::Text("foo/bar".as_bytes());
-        assert_eq!(AttributeName::column_result(v)?, attr);
+        use crate::network::*;
 
-        let attr = Value::Attribute(":foo/bar".to_owned());
-        assert_eq!(attr.to_sql()?, "foo/bar".to_sql()?);
+        let mut network = Network::<ValueRef>::default();
 
-        let v = ValueRef::Text("foo/bar".as_bytes());
-        assert_eq!(Value::from_affinity_value(Affinity::Attribute, v)?, attr);
+        let (e, _, v) = network
+            .fluent_triples()
+            .match_attribute(AttributeRef::from_static(":db/attribute"))
+            .eav();
+
+        woof.prefetch_attributes(&mut network)?;
+
+        {
+            let mut q = sql::Query::default();
+            use sql::PushToQuery;
+            Select::from(&network)
+                .field(e)
+                .field(v)
+                // .order_by(v.asc())
+                .push_to_query(&mut q);
+
+            eprintln!(">>> {}", q);
+
+            let mut stmt = woof.prepare(q.as_str())?;
+            let rows = stmt.query_map(q.params(), |row| {
+                use crate::driver::FromSqlAndTypeTag;
+
+                let type_tag = row.get::<_, i64>(0)?;
+                let value = row.get_ref(1)?;
+                let a = Value::column_result(type_tag, value)?;
+
+                let type_tag = row.get::<_, i64>(2)?;
+                let value = row.get_ref(3)?;
+                let b = Value::column_result(type_tag, value)?;
+
+                Ok((a, b))
+            })?;
+            for result in rows {
+                let (a, b) = result.context("row result")?;
+                eprintln!("{:?} {:?}", a, b);
+            }
+        }
+
+        // return Ok(());
+
+        // TODO
+        let mut network: Network = Default::default();
+
+        // ?calvin :book/title "The Complete Calvin and Hobbes"
+        let calvin = network
+            .fluent_triples()
+            .match_attribute(AttributeRef::from_static(":book/title"))
+            .match_value("The Complete Calvin and Hobbes")
+            .entity();
+        // ?rating :rating/book ?calvin
+        let rating = network
+            .fluent_triples()
+            .match_attribute(AttributeRef::from_static(":rating/book"))
+            .link_value(calvin)
+            .entity();
+        // ?rating :rating/score 1
+        network
+            .fluent_triples()
+            .link_entity(rating)
+            .match_attribute(AttributeRef::from_static(":rating/score"))
+            .match_value(1);
+        // ?rating :rating/user ?user
+        let user = network
+            .fluent_triples()
+            .link_entity(rating)
+            .match_attribute(AttributeRef::from_static(":rating/user"))
+            .value();
+        // ?more-great-takes :rating/user ?user
+        let more_great_takes = network
+            .fluent_triples()
+            .match_attribute(AttributeRef::from_static(":rating/user"))
+            .link_value(user)
+            .entity();
+        // ?more-great-takes :rating/book ?book
+        let book = network
+            .fluent_triples()
+            .link_entity(more_great_takes)
+            .match_attribute(AttributeRef::from_static(":rating/book"))
+            .value();
+        // ?more-great-takes :rating/score 5
+        network
+            .fluent_triples()
+            .link_entity(more_great_takes)
+            .match_attribute(AttributeRef::from_static(":rating/score"))
+            .match_value(5);
+        // ?book :book/title
+        let title = network
+            .fluent_triples()
+            .link_entity(book)
+            .match_attribute(AttributeRef::from_static(":book/title"))
+            .value();
+        // ?book :book/avg-rating
+        let rating = network
+            .fluent_triples()
+            .link_entity(book)
+            .match_attribute(AttributeRef::from_static(":book/avg-rating"))
+            .value();
+
+        woof.prefetch_attributes(&mut network)?;
+
+        let e = woof
+            .explain_plan(&Select::from(&network).field(title).field(rating))
+            .context("explain")?;
+        eprintln!("{}", e);
+
+        {
+            let mut q = sql::Query::default();
+            use sql::PushToQuery;
+            Select::from(&network)
+                .field(title)
+                .field(rating)
+                // .limit(10)
+                .push_to_query(&mut q);
+            eprintln!(">>> {}", q);
+
+            let mut stmt = woof.prepare(q.as_str())?;
+            let rows = stmt.query_map(q.params(), |row| {
+                use crate::driver::FromSqlAndTypeTag;
+
+                let type_tag = row.get::<_, i64>(0)?;
+                let value = row.get_ref(1)?;
+                let a = Value::column_result(type_tag, value)?;
+
+                let type_tag = row.get::<_, i64>(2)?;
+                let value = row.get_ref(3)?;
+                let b = Value::column_result(type_tag, value)?;
+
+                Ok((a, b))
+            })?;
+            for result in rows {
+                let (a, b) = result.context("row result")?;
+                eprintln!("{:?} {:?}", a, b);
+            }
+        }
 
         Ok(())
     }
 
-    pub(crate) fn blank_db() -> Result<rusqlite::Connection> {
-        let mut conn = rusqlite::Connection::open_in_memory()?;
-        Session::init_schema(&mut conn)?;
-        Ok(conn)
-    }
+    fn import_books(woof: &DontWoof) -> anyhow::Result<()> {
+        let mut books = std::collections::BTreeMap::<i64, Encoded<Entity>>::new();
 
-    pub(crate) fn goodbooks() -> Result<rusqlite::Connection> {
-        let mut db = blank_db()?;
-        let s = Session::new(&mut db)?;
+        let db_attr = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
 
-        let mut books = HashMap::<i64, EntityId>::new();
+        let title: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":book/title".parse::<Attribute>()?)?)?
+            .into();
+        let isbn: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":book/isbn".parse::<Attribute>()?)?)?
+            .into();
+        let authors: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":book/authors".parse::<Attribute>()?)?)?
+            .into();
+        let avg_rating: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(
+                db_attr,
+                woof.encode(":book/avg-rating".parse::<Attribute>()?)?,
+            )?
+            .into();
 
-        {
-            let title = s.new_attribute(":book/title")?;
-            let avg_rating = s.new_attribute(":book/avg-rating")?;
-            let isbn = s.new_attribute(":book/isbn")?;
-            let authors = s.new_attribute(":book/authors")?;
-
-            let mut r = csv::Reader::from_path("goodbooks-10k/books.csv")?;
-            for result in r.deserialize().take(1_000) {
-                let book: Book = result?;
-
-                let e = s.new_entity()?;
-                s.assert(&e, &title, &book.title)?;
-                s.assert(&e, &avg_rating, &book.average_rating)?;
-                s.assert(&e, &isbn, &book.isbn)?;
-                s.assert(&e, &authors, &book.authors)?;
-
-                books.insert(book.book_id, e.id);
-            }
+        let mut r = csv::Reader::from_path("goodbooks-10k/books.csv")?;
+        for result in r.deserialize() {
+            let book: Book = result?;
+            let entity = woof
+                .fluent_entity()?
+                .assert(title, woof.encode(Value::from(book.title))?)?
+                .assert(isbn, woof.encode(Value::from(book.isbn))?)?
+                .assert(authors, woof.encode(Value::from(book.authors))?)?
+                .assert(avg_rating, woof.encode(Value::from(book.average_rating))?)?
+                .into();
+            books.insert(book.book_id, entity);
         }
 
-        {
-            let score = s.new_attribute(":rating/score")?; // aka one-to-five
-            let book = s.new_attribute(":rating/book")?;
-            let user = s.new_attribute(":rating/user")?;
+        let score: Encoded<Entity> = woof // aka one-to-five
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":rating/score".parse::<Attribute>()?)?)?
+            .into();
+        let book: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":rating/book".parse::<Attribute>()?)?)?
+            .into();
+        let user: Encoded<Entity> = woof
+            .fluent_entity()?
+            .assert(db_attr, woof.encode(":rating/user".parse::<Attribute>()?)?)?
+            .into();
 
-            let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
-            for result in r.deserialize().take(2_000) {
-                let rating: Rating = result?;
+        let mut r = csv::Reader::from_path("goodbooks-10k/ratings.csv")?;
+        for result in r.deserialize().take(5_000) {
+            let rating: Rating = result?;
+            let book_ref = books[&rating.book_id];
 
-                // if this is a rating for a book we didn't add, ignore it
-                let book_ref = match books.get(&rating.book_id) {
-                    None => continue,
-                    Some(v) => v,
-                };
-
-                let e = s.new_entity()?;
-                s.assert(&e, &book, book_ref)?;
-                s.assert(&e, &user, &rating.user_id)?;
-                s.assert(&e, &score, &rating.rating)?;
-            }
+            woof.fluent_entity()?
+                .assert(book, book_ref)?
+                .assert(user, woof.encode(ValueRef::from(rating.user_id))?)?
+                .assert(score, woof.encode(ValueRef::from(rating.rating))?)?;
         }
 
-        s.optimize()?;
-        s.commit()?;
-        return Ok(db);
+        return Ok(());
 
         #[derive(Debug, serde::Deserialize)]
         struct Book {
@@ -853,241 +729,5 @@ mod tests {
             book_id: i64,
             rating: i64,
         }
-    }
-
-    #[test]
-    fn explain() -> Result<()> {
-        let mut db = goodbooks()?;
-        let sess = Session::new(&mut db)?;
-
-        let mut p = Projection::<Value>::default();
-        let book_attrs = &[AttributeName::from_static(":book/title")];
-        let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
-        let sel = p.select(&book);
-        println!("{}", sess.explain(&sel)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn explain_plan() -> Result<()> {
-        let mut db = goodbooks()?;
-        let sess = Session::new(&mut db)?;
-
-        let mut p = Projection::<Value>::default();
-        let book_attrs = &[AttributeName::from_static(":book/title")];
-        let book = p.entity_group("b").unwrap().attribute_map(book_attrs);
-        let sel = p.select(&book);
-        println!("{}", sess.explain_plan(&sel)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn unique_for_attribute() {
-        let mut db = blank_db().unwrap();
-
-        /* :attr/ident is unique for attribute */
-        {
-            let session = Session::new(&mut db).unwrap();
-            session.new_attribute(":foo/bar").unwrap();
-            assert_eq!(
-                session.new_attribute(":foo/bar"),
-                Err(Error::NotUniqueForAttribute)
-            );
-        };
-
-        let session = Session::new(&mut db).unwrap();
-        let name = session.new_attribute(":person/name").unwrap();
-        let bob1 = session.new_entity().unwrap();
-        let bob2 = session.new_entity().unwrap();
-        let bob_name = Value::Text("Bob".to_owned());
-        session.assert(&bob1, &name, &bob_name).unwrap();
-        session.commit().unwrap();
-
-        /* make :person/name unique for attribute _after_ non-unique data exists */
-        {
-            let session = Session::new(&mut db).unwrap();
-            session.assert(&bob2, &name, &bob_name).unwrap();
-            let res = session.assert(&name, &ATTR_UNIQUE, &Value::Integer(1));
-            assert_eq!(res, Err(Error::NotUniqueForAttribute));
-        };
-
-        /* make :person/name unique for attribute and then add data */
-        {
-            let session = Session::new(&mut db).unwrap();
-            session
-                .assert(&name, &ATTR_UNIQUE, &Value::Integer(1))
-                .unwrap();
-            session.commit().unwrap();
-        }
-
-        {
-            let session = Session::new(&mut db).unwrap();
-            let res = session.assert(&bob2, &name, &bob_name);
-            assert_eq!(res, Err(Error::NotUniqueForAttribute));
-        }
-
-        /* retract and try again */
-        {
-            let session = Session::new(&mut db).unwrap();
-            session
-                .retract(&name, &ATTR_UNIQUE, &Value::Integer(1))
-                .unwrap();
-            session.commit().unwrap();
-        }
-
-        {
-            let session = Session::new(&mut db).unwrap();
-            session.assert(&bob2, &name, &bob_name).unwrap();
-            session.commit().unwrap();
-        }
-    }
-
-    #[test]
-    fn fuck_with_entity_uuid() {
-        let mut db = blank_db().unwrap();
-        let session = Session::new(&mut db).unwrap();
-
-        // assert_eq!(
-        //     session.retract(
-        //         &types::RowId(ENTITY_UUID_ROWID),
-        //         &ATTR_UNIQUE,
-        //         &Value::Integer(1),
-        //     ),
-        //     Err(Error::Protected)
-        // );
-
-        let e = session.new_entity().unwrap();
-        assert_eq!(
-            session.retract(&e, &ENTITY_UUID, &e.id),
-            Err(Error::Immutable(":entity/uuid"))
-        );
-        assert_eq!(
-            session.assert(&e, &ENTITY_UUID, &Value::Integer(420)),
-            Err(Error::Immutable(":entity/uuid"))
-        );
-    }
-
-    #[test]
-    fn upsert_maybe_i_guess() -> Result<()> {
-        let mut db = blank_db()?;
-
-        let session = Session::new(&mut db)?;
-        let name = session.new_attribute(":person/name")?;
-        let bob = session.new_entity()?;
-        session.assert(&bob, &name, &Value::Text("bob".to_owned()))?;
-
-        let res = session.assert(&bob, &name, &Value::Text("jim".to_owned()));
-        assert_eq!(res, Err(Error::NotUniqueForEntity));
-
-        session.commit()?;
-        Ok(())
-    }
-
-    #[test]
-    fn retract() {
-        let mut db = blank_db().unwrap();
-
-        let session = Session::new(&mut db).unwrap();
-
-        let name = session.new_attribute(":person/name").unwrap();
-        let bob = session.new_entity().unwrap();
-        let bobs_name = Value::Text("bob".to_owned());
-
-        session.assert(&bob, &name, &bobs_name).unwrap();
-
-        let pat = [pat!(?p ":person/name" ?n)];
-        let mut prj = Projection::<Value>::from_patterns(&pat);
-        let sel = prj.select((prj.var("p").unwrap(), prj.var("n").unwrap()));
-
-        assert_eq!(
-            session.find(&sel).unwrap(),
-            vec![(Value::Entity(bob.id), bobs_name.clone())],
-        );
-
-        session.retract(&bob, &name, &bobs_name).unwrap();
-
-        assert_eq!(session.find(&sel).unwrap(), vec![]);
-
-        assert_eq!(
-            Err(Error::NotFound),
-            session.retract(&bob, &name, &bobs_name)
-        );
-    }
-
-    #[test]
-    fn select_location() -> Result<()> {
-        let mut db = blank_db()?;
-
-        let session = Session::new(&mut db)?;
-
-        let name = session.new_attribute(":person/name")?;
-        let bob = session.new_entity()?;
-
-        session.assert(&bob, &name, &Value::Text("bob".to_owned()))?;
-
-        let pat = [pat!(?p ?a ?n)];
-        let mut prj = Projection::<Value>::from_patterns(&pat);
-        let sel = prj.select((
-            prj.var("p").unwrap(),
-            prj.var("a").unwrap(),
-            prj.var("n").unwrap(),
-        ));
-        let _wow = session.find(&sel)?;
-        Ok(())
-    }
-
-    #[test]
-    fn wow() -> Result<()> {
-        let mut db = goodbooks()?;
-
-        let n_datoms: i64 =
-            db.query_row("SELECT count(*) FROM datoms", rusqlite::NO_PARAMS, |row| {
-                row.get(0)
-            })?;
-        eprintln!("there are {} datoms ... wow", n_datoms);
-
-        let sess = Session::new(&mut db)?;
-
-        // eprintln!("all datoms: {:#?}", sess.all_datoms::<Value>());
-
-        let patterns = vec![
-            /* */
-            pat!(?b ":book/avg-rating" ?v),
-            pat!(?r ":rating/book" ?b),
-        ];
-        let max_rating = Value::Real(4.0);
-
-        let mut p = Projection::<Value>::default();
-        p.add_patterns(&patterns);
-
-        let var_v = p.var("v").unwrap();
-        p.add_constraint(var_v.le(projection::Concept::value(&max_rating)));
-
-        let book_attrs = [
-            AttributeName::from_static(":book/title"),
-            AttributeName::from_static(":book/isbn"),
-            AttributeName::from_static(":book/avg-rating"),
-        ];
-        let book_map = p.entity_group("b").unwrap().attribute_map(&book_attrs);
-
-        let rate_attrs = [
-            AttributeName::from_static(":rating/user"),
-            AttributeName::from_static(":rating/score"),
-        ];
-        let rate_map = p.entity_group("r").unwrap().attribute_map(&rate_attrs);
-
-        // just make sure this compiles ...
-        let _ = p.select(&book_map);
-
-        let mut sel = p.select((&book_map, &rate_map));
-        sel.limit(8);
-        let wow = sess.find(&sel)?;
-
-        let jaysons = serde_json::to_string_pretty(&wow)?;
-        println!("{}", jaysons);
-
-        Ok(())
     }
 }

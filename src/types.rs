@@ -1,20 +1,218 @@
+//! Relating to types for entities, attributes, and other database values.
+
 use std::{
-    borrow::{Borrow, Cow},
+    borrow::{Borrow, ToOwned},
     convert::TryFrom,
     ops::Deref,
+    str::FromStr,
 };
+use thiserror::Error;
+use uuid::Uuid;
 
-use anyhow::Context;
+pub(crate) const PLAIN_TAG: i64 = 0;
+pub(crate) const ENTITY_ID_TAG: i64 = 1;
+pub(crate) const ATTRIBUTE_IDENTIFIER_TAG: i64 = 2;
+// pub const USER_TAG: i64 = 256;
 
-use crate::{sql, T_ATTRIBUTE, T_ENTITY};
+pub trait TypeTag {
+    // type Meme;
+    // fn new(i64) -> Self;
+    fn type_tag(&self) -> i64;
+}
 
-pub static ENTITY_UUID: AttributeName = AttributeName(Cow::Borrowed(":entity/uuid"));
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Entity(Entity),
+    Attribute(Attribute),
+    Text(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    Uuid(Uuid),
+    Blob(Vec<u8>),
+    // Timestamp(...),
+}
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+/// A borrowing version of [Value]
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum ValueRef<'a> {
+    Entity(Entity),
+    Attribute(AttributeRef<'a>),
+    Text(&'a str),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    Uuid(Uuid),
+    Blob(&'a [u8]),
+}
+
+impl TypeTag for Value {
+    fn type_tag(&self) -> i64 {
+        match self {
+            Value::Entity(e) => e.type_tag(),
+            Value::Attribute(a) => a.type_tag(),
+            _ => PLAIN_TAG,
+        }
+    }
+}
+
+impl TypeTag for ValueRef<'_> {
+    fn type_tag(&self) -> i64 {
+        match self {
+            ValueRef::Entity(e) => e.type_tag(),
+            ValueRef::Attribute(a) => a.type_tag(),
+            _ => PLAIN_TAG,
+        }
+    }
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(value: &'a Value) -> ValueRef<'a> {
+        match *value {
+            Value::Entity(e) => ValueRef::Entity(e),
+            Value::Attribute(ref a) => ValueRef::Attribute(a.into()),
+            Value::Text(ref s) => ValueRef::Text(&s),
+            Value::Integer(i) => ValueRef::Integer(i),
+            Value::Float(f) => ValueRef::Float(f),
+            Value::Boolean(b) => ValueRef::Boolean(b),
+            Value::Uuid(u) => ValueRef::Uuid(u),
+            Value::Blob(ref b) => ValueRef::Blob(b.as_slice()),
+        }
+    }
+}
+
+impl From<ValueRef<'_>> for Value {
+    fn from(borrowed: ValueRef<'_>) -> Value {
+        match borrowed {
+            ValueRef::Entity(e) => Value::Entity(e),
+            ValueRef::Attribute(a) => Value::Attribute(a.into()),
+            ValueRef::Text(s) => Value::Text(s.to_owned()),
+            ValueRef::Integer(i) => Value::Integer(i),
+            ValueRef::Float(f) => Value::Float(f),
+            ValueRef::Boolean(b) => Value::Boolean(b),
+            ValueRef::Uuid(u) => Value::Uuid(u),
+            ValueRef::Blob(b) => Value::Blob(b.to_owned()),
+        }
+    }
+}
+
+impl From<Entity> for Value {
+    fn from(v: Entity) -> Self {
+        Value::Entity(v)
+    }
+}
+
+impl From<Entity> for ValueRef<'_> {
+    fn from(v: Entity) -> Self {
+        ValueRef::Entity(v)
+    }
+}
+
+impl From<Attribute> for Value {
+    fn from(v: Attribute) -> Self {
+        Value::Attribute(v)
+    }
+}
+
+impl<'a> From<AttributeRef<'a>> for ValueRef<'a> {
+    fn from(v: AttributeRef<'a>) -> Self {
+        ValueRef::Attribute(v)
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::Text(s)
+    }
+}
+
+impl<'a> From<&'a str> for ValueRef<'a> {
+    fn from(s: &'a str) -> Self {
+        ValueRef::Text(s)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Value::Integer(i)
+    }
+}
+
+impl From<i64> for ValueRef<'_> {
+    fn from(i: i64) -> Self {
+        ValueRef::Integer(i)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Value::Float(f)
+    }
+}
+
+impl From<f64> for ValueRef<'_> {
+    fn from(f: f64) -> Self {
+        ValueRef::Float(f)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Boolean(b)
+    }
+}
+
+impl From<bool> for ValueRef<'_> {
+    fn from(b: bool) -> Self {
+        ValueRef::Boolean(b)
+    }
+}
+
+impl From<Uuid> for Value {
+    fn from(u: Uuid) -> Self {
+        Value::Uuid(u)
+    }
+}
+
+impl From<Uuid> for ValueRef<'_> {
+    fn from(u: Uuid) -> Self {
+        ValueRef::Uuid(u)
+    }
+}
+
+impl From<Vec<u8>> for Value {
+    fn from(v: Vec<u8>) -> Self {
+        Value::Blob(v)
+    }
+}
+
+impl<'a> From<&'a [u8]> for ValueRef<'a> {
+    fn from(v: &'a [u8]) -> Self {
+        ValueRef::Blob(v)
+    }
+}
+
+/// A uuid referring to an entity.
+#[derive(Debug, Clone, PartialEq, Copy)]
 #[repr(transparent)]
-pub struct EntityId(#[serde(with = "crate::types::_serde::entity")] uuid::Uuid);
+pub struct Entity(uuid::Uuid);
 
-impl Deref for EntityId {
+// impl Entity {
+//     pub fn new() -> Self {
+//     }
+// }
+
+impl std::fmt::Display for Entity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buf = &mut [0; 37];
+        buf[0] = 0x23; // a # character
+        self.0.to_hyphenated_ref().encode_lower(&mut buf[1..]);
+        let s = std::str::from_utf8(buf).unwrap();
+        write!(f, "{}", s)
+    }
+}
+
+impl Deref for Entity {
     type Target = uuid::Uuid;
 
     fn deref(&self) -> &Self::Target {
@@ -22,39 +220,174 @@ impl Deref for EntityId {
     }
 }
 
-impl<I> From<I> for EntityId
-where
-    I: Into<uuid::Uuid>,
-{
-    fn from(i: I) -> Self {
-        EntityId(i.into())
+impl TryFrom<&'_ str> for Entity {
+    type Error = EntityParseError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s.chars().next() {
+            Some('#') => (),
+            Some(_) => return Err(EntityParseError::InvalidLeader),
+            None => return Err(EntityParseError::MissingLeader),
+        }
+
+        let (_, uuid) = s.split_at(1);
+        uuid.parse().map(Entity).map_err(EntityParseError::Uuid)
     }
 }
 
-impl rusqlite::ToSql for EntityId {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        self.0.to_sql()
+impl FromStr for Entity {
+    type Err = EntityParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Entity::try_from(s)
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
+impl From<uuid::Uuid> for Entity {
+    fn from(u: uuid::Uuid) -> Self {
+        Entity(u)
+    }
+}
+
+impl TypeTag for Entity {
+    fn type_tag(&self) -> i64 {
+        ENTITY_ID_TAG
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum EntityParseError {
+    #[error("expected leading '#' but found something else instead")]
+    InvalidLeader,
+    #[error("expected leading '#' but found nothing")]
+    MissingLeader,
+    #[error("invalid uuid")]
+    Uuid(#[from] uuid::Error),
+}
+
+/// An attribute name or identifier, like :db/id or :pet/name
+/// TODO provide an interface to create these from strings with no leading :
+#[derive(Debug, Clone, PartialEq)]
 #[repr(transparent)]
-pub struct AttributeName<'a>(
-    #[serde(deserialize_with = "deserialize_cow_with_attribute_prefix")] Cow<'a, str>,
-);
+pub struct Attribute(String);
 
-impl<'a> AttributeName<'a> {
+impl Attribute {
+    pub fn from_string_unchecked(s: String) -> Self {
+        Attribute(s)
+    }
+}
+
+impl Deref for Attribute {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.borrow()
+    }
+}
+
+/// TODO This probably causes an allocation unfortunately...
+impl TryFrom<String> for Attribute {
+    type Error = AttributeParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        parse_attribute(&s).map(|s: &str| Attribute(s.to_string()))
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Attribute {
+    type Error = AttributeParseError;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        parse_attribute(&s).map(|s: &str| Attribute(s.to_string()))
+    }
+}
+
+impl From<AttributeRef<'_>> for Attribute {
+    fn from(borrowed: AttributeRef<'_>) -> Attribute {
+        let AttributeRef(s) = borrowed;
+        Attribute(s.to_owned())
+    }
+}
+
+/// A borrowing version of [Attribute]
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(transparent)]
+pub struct AttributeRef<'a>(&'a str);
+
+// TODO do something similar as Path does ...
+// pub struct AttributeRef(str);
+//
+// see path.rs:
+//   pub fn new<S: AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
+//       unsafe { &*(s.as_ref() as *const OsStr as *const Path) }
+//   }
+//
+// And implement ToOwned and Borrow and finally be happy...
+
+impl<'a> From<&'a Attribute> for AttributeRef<'a> {
+    fn from(attribute: &'a Attribute) -> AttributeRef<'a> {
+        let Attribute(s) = attribute;
+        AttributeRef(s)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for AttributeRef<'a> {
+    type Error = AttributeParseError;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        parse_attribute(s).map(AttributeRef)
+    }
+}
+
+fn parse_attribute<'a>(s: &'a str) -> Result<&'a str, AttributeParseError> {
+    let s = match s.chars().next() {
+        Some(':') => &s[1..],
+        Some(_) => return Err(AttributeParseError::InvalidLeader),
+        None => return Err(AttributeParseError::MissingLeader),
+    };
+
+    if let Some(_) = s.find(|s: char| s.is_whitespace()) {
+        return Err(AttributeParseError::InvalidWhitespace);
+    }
+
+    match s.len() {
+        1..=255 => Ok(s),
+        _ => Err(AttributeParseError::InvalidLength),
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AttributeParseError {
+    #[error("expected leading ':' but found something else instead")]
+    InvalidLeader,
+    #[error("expected leading ':' but found nothing")]
+    MissingLeader,
+    #[error("whitespace not allowed")]
+    InvalidWhitespace,
+    #[error("identifier is either too long or too short (1..=255)")]
+    InvalidLength,
+}
+
+impl FromStr for Attribute {
+    type Err = AttributeParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Attribute::try_from(s)
+    }
+}
+
+impl AttributeRef<'static> {
+    /// Panics if the attribute is invalid
     pub fn from_static(s: &'static str) -> Self {
-        AttributeName::try_from(Cow::Borrowed(s)).unwrap()
+        AttributeRef::try_from(s).unwrap()
     }
 
     pub const fn from_static_unchecked(s: &'static str) -> Self {
-        AttributeName(Cow::Borrowed(s))
+        AttributeRef(s)
     }
 }
 
-impl<'a> Deref for AttributeName<'a> {
+impl<'a> Deref for AttributeRef<'a> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -62,399 +395,39 @@ impl<'a> Deref for AttributeName<'a> {
     }
 }
 
-impl From<&'static str> for AttributeName<'static> {
-    fn from(s: &'static str) -> Self {
-        AttributeName::from_static(s)
+impl TypeTag for Attribute {
+    fn type_tag(&self) -> i64 {
+        ATTRIBUTE_IDENTIFIER_TAG
     }
 }
 
-impl<'a> From<Attribute<'a>> for AttributeName<'a> {
-    fn from(attr: Attribute<'a>) -> Self {
-        attr.ident
+impl TypeTag for AttributeRef<'_> {
+    fn type_tag(&self) -> i64 {
+        ATTRIBUTE_IDENTIFIER_TAG
     }
 }
 
-impl<'a> TryFrom<Cow<'a, str>> for AttributeName<'a> {
-    type Error = String;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn try_from(s: Cow<'a, str>) -> Result<Self, Self::Error> {
-        if let Some(idx) = s.find(|s: char| s.is_ascii_whitespace()) {
-            return Err(format!("unexpected whitespace at {}", idx));
-        }
+    #[test]
+    fn test_attribute_validation() {
+        assert!(Attribute::try_from("foo/meme".to_string()).is_err());
+        assert!(Attribute::try_from(":foo/meme extra".to_string()).is_err());
+        assert!(Attribute::try_from(":foo/meme".to_string()).is_ok());
 
-        if !s.starts_with(':') {
-            if let Some(c) = s.get(0..1) {
-                return Err(format!("expected leading ':' found '{}'", c));
-            } else {
-                return Err("expected leading ':' found nothing".to_owned());
-            }
-        }
-
-        Ok(AttributeName(s))
-    }
-}
-
-impl<'a> rusqlite::ToSql for AttributeName<'a> {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        let (colon, name) = self.0.split_at(1);
-        assert_eq!(colon, ":");
-        name.to_sql()
-    }
-}
-
-impl<'a> rusqlite::types::FromSql for AttributeName<'a> {
-    fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-        value.as_str().map(|s| {
-            let mut n = String::with_capacity(1 + s.len());
-            n.push(':');
-            n.push_str(s);
-            AttributeName(Cow::from(n))
-        })
-    }
-}
-
-pub trait RowIdOr<T> {
-    fn row_id_or(&self) -> either::Either<i64, &T>;
-}
-
-/// TODO
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct RowId(pub i64);
-
-impl<T> RowIdOr<T> for RowId {
-    fn row_id_or(&self) -> either::Either<i64, &T> {
-        either::Left(self.0)
-    }
-}
-
-impl RowIdOr<EntityId> for EntityId {
-    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
-        either::Right(self)
-    }
-}
-
-impl RowIdOr<EntityId> for Attribute<'_> {
-    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
-        either::Right(&self.entity.id)
-    }
-}
-
-impl<'a> RowIdOr<AttributeName<'a>> for AttributeName<'a> {
-    fn row_id_or(&self) -> either::Either<i64, &AttributeName<'a>> {
-        either::Right(self)
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct Entity {
-    pub(crate) rowid: i64,
-    pub id: EntityId,
-}
-
-/// Not implemented for all T, because Entity and Attribute rowids are not the same!
-impl RowIdOr<EntityId> for Entity {
-    fn row_id_or(&self) -> either::Either<i64, &EntityId> {
-        either::Left(self.rowid)
-    }
-}
-
-impl Deref for Entity {
-    type Target = EntityId; //uuid::Uuid;
-
-    fn deref(&self) -> &Self::Target {
-        &self.id
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct Attribute<'a> {
-    pub entity: Entity,
-    pub ident: AttributeName<'a>,
-}
-
-/// Not implemented for all T, because Entity and Attribute rowids are not the same!
-impl<'a> RowIdOr<AttributeName<'a>> for Attribute<'a> {
-    fn row_id_or<'s>(&'s self) -> either::Either<i64, &'s AttributeName<'a>> {
-        either::Left(self.entity.rowid)
-    }
-}
-
-impl<'a> Deref for Attribute<'a> {
-    type Target = AttributeName<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ident
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub enum Affinity {
-    Entity,
-    Attribute,
-    Other(i64),
-}
-
-impl Affinity {
-    pub(crate) fn t_and_bind(&self) -> (&i64, &'static str) {
-        match self {
-            Affinity::Entity => (&T_ENTITY, sql::bind_entity()),
-            Affinity::Attribute => (&T_ATTRIBUTE, "?"),
-            Affinity::Other(t) => (t, "?"),
-        }
-    }
-}
-
-impl rusqlite::types::FromSql for Affinity {
-    fn column_result(v: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-        Affinity::try_from(v.as_i64()?)
-            .map_err(|e| anyhow::format_err!("affinity out of range: {}", e).into())
-            .map_err(|e| rusqlite::types::FromSqlError::Other(e))
-    }
-}
-
-impl TryFrom<i64> for Affinity {
-    type Error = i64;
-
-    fn try_from(t: i64) -> Result<Self, Self::Error> {
-        match t {
-            T_ENTITY => Ok(Affinity::Entity),
-            T_ATTRIBUTE => Ok(Affinity::Attribute),
-            _ if t >= 0 => Ok(Affinity::Other(t)),
-            _ => Err(t),
-        }
-    }
-}
-
-/// Has an [Affinity]
-pub trait HasAffinity {
-    fn affinity(&self) -> Affinity;
-}
-
-impl HasAffinity for EntityId {
-    fn affinity(&self) -> Affinity {
-        Affinity::Entity
-    }
-}
-
-impl<'a> HasAffinity for AttributeName<'a> {
-    fn affinity(&self) -> Affinity {
-        Affinity::Attribute
-    }
-}
-
-impl<'a, I> HasAffinity for I
-where
-    I: Into<rusqlite::types::Value>,
-{
-    fn affinity(&self) -> Affinity {
-        Affinity::Other(0)
-    }
-}
-
-pub trait FromAffinityValue {
-    fn from_affinity_value(
-        _: Affinity,
-        _: rusqlite::types::ValueRef,
-    ) -> rusqlite::types::FromSqlResult<Self>
-    where
-        Self: Sized;
-
-    fn read_with_affinity<'a>(
-        affinity: Affinity,
-        v_ref: rusqlite::types::ValueRef,
-    ) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        Self::from_affinity_value(affinity, v_ref)
-            .with_context(|| format!("reading value {:?} with affinity {:?}", v_ref, affinity))
-            .map_err(|e| rusqlite::types::FromSqlError::Other(e.into()).into())
+        assert!(AttributeRef::try_from("foo/meme").is_err());
+        assert!(AttributeRef::try_from(":foo/meme extra").is_err());
+        assert!(AttributeRef::try_from(":foo/meme").is_ok());
     }
 
-    fn read_affinity_value<'a>(c: &mut sql::RowCursor<'a>) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        let affinity = c.get::<Affinity>()?;
-        let v_ref = c.get_raw();
-        let v = Self::read_with_affinity(affinity, v_ref)?;
-        Ok(v)
+    #[test]
+    fn test_entity_validation() {
+        assert!(Entity::try_from("#not-a-uuid").is_err());
+        assert!(Entity::try_from("b3ddeb4c-a61f-4433-8acd-7e10117f142e").is_err());
+        assert!("#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+            .parse::<Entity>()
+            .is_ok());
     }
 }
-
-#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum Value {
-    /// Anything that looks like a uuid ends up in here
-    Entity(EntityId),
-    #[serde(deserialize_with = "deserialize_with_attribute_prefix")]
-    Attribute(String),
-    Null,
-    Integer(i64),
-    Real(f64),
-    // Instant(chrono::DateTime<chrono::Utc>),
-    // Bool(bool), ???
-    Text(String),
-    Blob(Vec<u8>),
-}
-
-impl From<Entity> for Value {
-    fn from(e: Entity) -> Self {
-        Value::Entity(e.id)
-    }
-}
-
-impl From<rusqlite::types::Value> for Value {
-    fn from(v: rusqlite::types::Value) -> Self {
-        match v {
-            rusqlite::types::Value::Null => Value::Null,
-            rusqlite::types::Value::Integer(i) => Value::Integer(i),
-            rusqlite::types::Value::Real(i) => Value::Real(i),
-            rusqlite::types::Value::Text(i) => Value::Text(i),
-            rusqlite::types::Value::Blob(i) => Value::Blob(i),
-        }
-    }
-}
-
-impl FromAffinityValue for Value {
-    fn from_affinity_value(
-        t: Affinity,
-        v: rusqlite::types::ValueRef,
-    ) -> rusqlite::types::FromSqlResult<Self>
-    where
-        Self: Sized,
-    {
-        use rusqlite::types::FromSql;
-        Ok(match t {
-            Affinity::Entity => Value::Entity(EntityId(uuid::Uuid::column_result(v)?)),
-            Affinity::Attribute => {
-                Value::Attribute(AttributeName::column_result(v)?.0.into_owned())
-            }
-            Affinity::Other(_) => Value::from(rusqlite::types::Value::column_result(v)?),
-        })
-    }
-}
-
-impl HasAffinity for Value {
-    fn affinity(&self) -> Affinity {
-        match self {
-            Value::Entity(_) => Affinity::Entity,
-            Value::Attribute(_) => Affinity::Attribute,
-            Value::Null | Value::Integer(_) | Value::Real(_) | Value::Text(_) | Value::Blob(_) => {
-                Affinity::Other(0)
-            }
-        }
-    }
-}
-
-impl rusqlite::ToSql for Value {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-        match self {
-            Value::Entity(v) => v.to_sql(),
-            Value::Attribute(v) => {
-                let (colon, name) = v.split_at(1);
-                assert_eq!(colon, ":");
-                name.to_sql()
-            }
-            Value::Null => rusqlite::types::Null.to_sql(),
-            Value::Integer(v) => v.to_sql(),
-            Value::Real(v) => v.to_sql(),
-            Value::Text(v) => v.to_sql(),
-            Value::Blob(v) => v.to_sql(),
-        }
-    }
-}
-
-pub mod _serde {
-    pub mod entity {
-        pub fn serialize<S>(e: &uuid::Uuid, ser: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            // nasty ......
-            let buf = &mut [0; 37];
-            buf[0] = 0x23; // #
-            e.to_hyphenated_ref().encode_lower(&mut buf[1..]);
-            let s = std::str::from_utf8(buf).unwrap();
-            ser.serialize_str(s)
-        }
-
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<uuid::Uuid, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::Deserialize;
-            let s = String::deserialize(deserializer)?;
-            if !s.starts_with('#') {
-                return Err(serde::de::Error::custom(format!(
-                    "expected '#' found {}",
-                    s.get(0..1).unwrap_or("nothing")
-                )));
-            }
-            let (_, uuid) = s.split_at(1);
-            return uuid.parse().map_err(serde::de::Error::custom);
-        }
-    }
-}
-
-pub fn deserialize_with_attribute_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let s = String::deserialize(deserializer)?;
-    if !s.starts_with(':') {
-        return Err(serde::de::Error::custom(format!(
-            "expected ':' found {}",
-            s.get(0..1).unwrap_or("nothing")
-        )));
-    }
-    return Ok(s);
-}
-
-pub fn deserialize_cow_with_attribute_prefix<'de, 'a, D>(
-    deserializer: D,
-) -> Result<Cow<'a, str>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    deserialize_with_attribute_prefix(deserializer).map(Cow::from)
-}
-
-// #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
-// #[serde(untagged)]
-// pub enum ???Value {
-//     Map(HashMap<String, Value>),
-//     Scalar(Value),
-// }
-
-// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// struct MemeTime<T>(T); // &'a chrono::DateTime<chrono::Utc>);
-//
-// impl<T> Deref for MemeTime<T> {
-//     type Target = T;
-//
-//     fn deref(&self) -> &Self::Target {
-//         &self.0
-//     }
-// }
-//
-// impl rusqlite::types::ToSql for MemeTime<&chrono::DateTime<chrono::Utc>> {
-//     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
-//         Ok(self.timestamp_millis().into())
-//     }
-// }
-//
-// impl rusqlite::types::FromSql for MemeTime<chrono::DateTime<chrono::Utc>> {
-//     fn column_result(value: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
-//         use chrono::TimeZone;
-//         value.as_i64().and_then(|v| {
-//             chrono::Utc
-//                 .timestamp_millis_opt(v)
-//                 .single()
-//                 .ok_or_else(|| rusqlite::types::FromSqlError::OutOfRange(v))
-//                 .map(chrono::DateTime::<chrono::Utc>::from)
-//                 .map(MemeTime)
-//         })
-//     }
-// }

@@ -9,26 +9,28 @@ homepage = "https://github.com/sqwishy/owoof"
 description = "Uses SQLite to store data and a datalog-like format to query it. "
 keywords = ["datalog", "sqlite"]
 
-# [[bin]]
-# name = "cli"
-# required-features = ["cli"]
+[[bin]]
+name = "cli"
+required-features = ["cli"]
 
 [features]
 default = ["explain"]
 explain = []
-# cli = ["serde_json"]
+cli = ["serde", "serde_json", "anyhow", "either", "uuid/serde"]
 
 [dependencies]
-anyhow = "1"
 thiserror = "1"
-rusqlite = { version = "0.26", features = ["uuid", "functions", "hooks"] }
-uuid = { version = "0.8", features = ["v4"] }
-# uuid = { version = "0.8", features = ["serde", "v4"] }
+rusqlite  = { version = "0.26", features = ["uuid", "functions", "hooks"] }
+uuid      = { version = "0.8", features = ["v4"] }
+
 # chrono = { version = "0.4", features = ["serde"] }
-# serde = { version = "1", features = ["derive"] }
-# serde_json = { version = "1", optional = true }
+
+anyhow     = { version = "1", optional = true }
+serde      = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
+either     = { version = "1", optional = true }
 
 [dev-dependencies]
+anyhow = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 csv = "1"
-# serde_json = "1"

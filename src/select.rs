@@ -16,6 +16,12 @@ impl<'n, V> From<&'n GenericNetwork<V>> for Select<'n, V> {
     }
 }
 
+impl<'n, V> GenericNetwork<V> {
+    pub fn select(&'n self) -> Select<'n, V> {
+        Select::from(self)
+    }
+}
+
 impl<'n, V> Deref for Select<'n, V> {
     type Target = GenericNetwork<V>;
 
@@ -25,6 +31,10 @@ impl<'n, V> Deref for Select<'n, V> {
 }
 
 impl<'n, V> Select<'n, V> {
+    pub fn fields(&self) -> &[TriplesField] {
+        self.selection.as_slice()
+    }
+
     pub fn field(&mut self, field: TriplesField) -> &mut Self {
         self.selection.push(field);
         self

@@ -340,16 +340,6 @@ impl<'tx> DontWoof<'tx> {
     }
 
     pub fn into_tx(self) -> rusqlite::Transaction<'tx> {
-        // TODO XXX FIXME
-        // use std::mem::MaybeUninit;
-        // MaybeUninit::new(self.tx);
-        // let tx: rusqlite::Transaction = unsafe {
-        //     let mut garbage = MaybeUninit::uninit();
-        //     swap(&mut self.tx, &mut *garbage.as_mut_ptr());
-        //     garbage.assume_init()
-        // };
-        // Self::_unhook(&tx);
-        // tx
         self.tx.unwrap()
     }
 }

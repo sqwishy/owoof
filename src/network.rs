@@ -121,6 +121,30 @@ impl<V> GenericNetwork<V> {
     }
 }
 
+impl<V> GenericNetwork<V>
+where
+    V: PartialEq,
+{
+    pub fn is_linked(&self, a: TriplesField, b: TriplesField) -> Option<&Constraint<V>> {
+        self.constraints.iter().find(|c| match c {
+            &&Constraint::Eq { lh, rh: Match::Field(rh) } if lh == a && rh == b => true,
+            &&Constraint::Eq { lh, rh: Match::Field(rh) } if lh == b && rh == a => true,
+            _ => false,
+        })
+    }
+
+    pub fn constraint_value_matches<'s>(
+        &'s self,
+        v: V,
+    ) -> impl Iterator<Item = TriplesField> + 's {
+        let v = Match::Value(v);
+        self.constraints.iter().filter_map(move |c| match c {
+            Constraint::Eq { lh, rh } if rh == &v => Some(*lh),
+            _ => None,
+        })
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Triples(usize);
 
@@ -218,6 +242,14 @@ pub struct FluentTriples<'n, V> {
 }
 
 impl<'n, V> FluentTriples<'n, V> {
+    pub fn match_entity<I: Into<V>>(&mut self, i: I) -> &mut Self {
+        self.network.add_constraint(Constraint::Eq {
+            lh: self.triples.entity(),
+            rh: Match::Value(i.into()),
+        });
+        self
+    }
+
     pub fn match_attribute<I: Into<V>>(&mut self, i: I) -> &mut Self {
         self.network.add_constraint(Constraint::Eq {
             lh: self.triples.attribute(),
@@ -237,6 +269,12 @@ impl<'n, V> FluentTriples<'n, V> {
     pub fn link_entity<I: Into<Match<V>>>(&mut self, i: I) -> &mut Self {
         self.network
             .add_constraint(Constraint::Eq { lh: self.triples.entity(), rh: i.into() });
+        self
+    }
+
+    pub fn link_attribute<I: Into<Match<V>>>(&mut self, i: I) -> &mut Self {
+        self.network
+            .add_constraint(Constraint::Eq { lh: self.triples.attribute(), rh: i.into() });
         self
     }
 

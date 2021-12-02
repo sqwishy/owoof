@@ -49,21 +49,20 @@ impl<'a> FromSql for Entity {
 
 impl ToSql for Attribute {
     fn to_sql(&self) -> Result<ToSqlOutput> {
-        (**self).to_sql()
+        self.without_prefix().to_sql()
     }
 }
 
 impl<'a> ToSql for AttributeRef<'a> {
     fn to_sql(&self) -> Result<ToSqlOutput> {
-        (**self).to_sql()
+        self.without_prefix().to_sql()
     }
 }
 
 impl<'a> FromSql for Attribute {
     fn column_result(value: SqlValueRef) -> FromSqlResult<Self> {
-        value
-            .as_str()
-            .map(|s| Attribute::from_string_unchecked(s.to_owned()))
+        let s = value.as_str()?;
+        Ok(Attribute::from_string_unchecked(format!(":{}", s)))
     }
 }
 

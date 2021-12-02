@@ -7,6 +7,7 @@ use std::{
     str::FromStr,
 };
 use thiserror::Error;
+
 use uuid::Uuid;
 
 pub(crate) const PLAIN_TAG: i64 = 0;
@@ -20,6 +21,14 @@ pub trait TypeTag {
     fn type_tag(&self) -> i64;
 }
 
+// Wow! Excellent meme!
+impl<T: TypeTag> TypeTag for &'_ T {
+    fn type_tag(&self) -> i64 {
+        (*self).type_tag()
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Entity(Entity),
@@ -195,12 +204,7 @@ impl<'a> From<&'a [u8]> for ValueRef<'a> {
 /// A uuid referring to an entity.
 #[derive(Debug, Clone, PartialEq, Copy)]
 #[repr(transparent)]
-pub struct Entity(uuid::Uuid);
-
-// impl Entity {
-//     pub fn new() -> Self {
-//     }
-// }
+pub struct Entity(Uuid);
 
 impl std::fmt::Display for Entity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -213,7 +217,7 @@ impl std::fmt::Display for Entity {
 }
 
 impl Deref for Entity {
-    type Target = uuid::Uuid;
+    type Target = Uuid;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -243,8 +247,8 @@ impl FromStr for Entity {
     }
 }
 
-impl From<uuid::Uuid> for Entity {
-    fn from(u: uuid::Uuid) -> Self {
+impl From<Uuid> for Entity {
+    fn from(u: Uuid) -> Self {
         Entity(u)
     }
 }
@@ -267,6 +271,7 @@ pub enum EntityParseError {
 
 /// An attribute name or identifier, like :db/id or :pet/name
 /// TODO provide an interface to create these from strings with no leading :
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq)]
 #[repr(transparent)]
 pub struct Attribute(String);
@@ -275,7 +280,14 @@ impl Attribute {
     pub fn from_string_unchecked(s: String) -> Self {
         Attribute(s)
     }
+
+    pub fn without_prefix(&'_ self) -> &'_ str {
+        AttributeRef(&self).without_prefix()
+    }
 }
+
+// impl std::fmt::Display for Attribute {
+// }
 
 impl Deref for Attribute {
     type Target = String;
@@ -285,12 +297,11 @@ impl Deref for Attribute {
     }
 }
 
-/// TODO This probably causes an allocation unfortunately...
 impl TryFrom<String> for Attribute {
     type Error = AttributeParseError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        parse_attribute(&s).map(|s: &str| Attribute(s.to_string()))
+        parse_attribute(&s).map(drop).map(|_| Attribute(s))
     }
 }
 
@@ -298,7 +309,7 @@ impl<'a> TryFrom<&'a str> for Attribute {
     type Error = AttributeParseError;
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        parse_attribute(&s).map(|s: &str| Attribute(s.to_string()))
+        parse_attribute(&s).map(Attribute::from)
     }
 }
 
@@ -310,9 +321,16 @@ impl From<AttributeRef<'_>> for Attribute {
 }
 
 /// A borrowing version of [Attribute]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(transparent)]
 pub struct AttributeRef<'a>(&'a str);
+
+impl<'a> AttributeRef<'a> {
+    pub fn without_prefix(&self) -> &'a str {
+        &self.0[1..]
+    }
+}
 
 // TODO do something similar as Path does ...
 // pub struct AttributeRef(str);
@@ -335,23 +353,23 @@ impl<'a> TryFrom<&'a str> for AttributeRef<'a> {
     type Error = AttributeParseError;
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        parse_attribute(s).map(AttributeRef)
+        parse_attribute(s)
     }
 }
 
-fn parse_attribute<'a>(s: &'a str) -> Result<&'a str, AttributeParseError> {
-    let s = match s.chars().next() {
+fn parse_attribute<'a>(s: &'a str) -> Result<AttributeRef, AttributeParseError> {
+    let rest = match s.chars().next() {
         Some(':') => &s[1..],
         Some(_) => return Err(AttributeParseError::InvalidLeader),
         None => return Err(AttributeParseError::MissingLeader),
     };
 
-    if let Some(_) = s.find(|s: char| s.is_whitespace()) {
+    if let Some(_) = rest.find(|c: char| c.is_whitespace()) {
         return Err(AttributeParseError::InvalidWhitespace);
     }
 
-    match s.len() {
-        1..=255 => Ok(s),
+    match rest.len() {
+        1..=255 => Ok(AttributeRef(s)),
         _ => Err(AttributeParseError::InvalidLength),
     }
 }
@@ -407,6 +425,21 @@ impl TypeTag for AttributeRef<'_> {
     }
 }
 
+#[cfg(feature = "serde")]
+pub mod _serde {
+    use super::*;
+    use serde::{Serialize, Serializer};
+
+    impl Serialize for Entity {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.collect_str(&self)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,6 +453,9 @@ mod tests {
         assert!(AttributeRef::try_from("foo/meme").is_err());
         assert!(AttributeRef::try_from(":foo/meme extra").is_err());
         assert!(AttributeRef::try_from(":foo/meme").is_ok());
+
+        assert!(AttributeRef::try_from(":f").is_ok());
+        assert!(AttributeRef::try_from(":").is_err());
     }
 
     #[test]

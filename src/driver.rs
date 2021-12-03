@@ -1,3 +1,4 @@
+//! [`rusqlite::types::ToSql`] and [`rusqlite::types::FromSql`] implementations on [`crate::types`]
 use rusqlite::{
     types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef as SqlValueRef},
     Result,
@@ -49,20 +50,19 @@ impl<'a> FromSql for Entity {
 
 impl ToSql for Attribute {
     fn to_sql(&self) -> Result<ToSqlOutput> {
-        self.without_prefix().to_sql()
+        self.just_the_identifier().to_sql()
     }
 }
 
-impl<'a> ToSql for AttributeRef<'a> {
+impl<'a> ToSql for &'a AttributeRef {
     fn to_sql(&self) -> Result<ToSqlOutput> {
-        self.without_prefix().to_sql()
+        self.just_the_identifier().to_sql()
     }
 }
 
 impl<'a> FromSql for Attribute {
     fn column_result(value: SqlValueRef) -> FromSqlResult<Self> {
-        let s = value.as_str()?;
-        Ok(Attribute::from_string_unchecked(format!(":{}", s)))
+        value.as_str().map(Attribute::from_ident)
     }
 }
 

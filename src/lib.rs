@@ -89,18 +89,18 @@
 //!
 //! let (p, _, person) = network
 //!     .fluent_triples()
-//!     .match_attribute(AttributeRef::from_static(":person/name"))
+//!     .match_attribute(":person/name")
 //!     .eav();
 //!
 //! let (a, _, _) = network
 //!     .fluent_triples()
-//!     .match_attribute(AttributeRef::from_static(":pet/human"))
+//!     .match_attribute(":pet/human")
 //!     .link_value(p)
 //!     .eav();
 //!
 //! let (a, _, pet) = network
 //!     .fluent_triples()
-//!     .match_attribute(AttributeRef::from_static(":pet/name"))
+//!     .match_attribute(":pet/name")
 //!     .eav();
 //!     
 //! // TODO finish this example with
@@ -160,7 +160,7 @@ impl<'tx> DontWoof<'tx> {
     /// Look up an attribute by its identifier.
     ///
     /// In other words, find ?e given ?a where ?e :db/attribute ?a.
-    pub fn attribute<'a, A: Into<AttributeRef<'a>>>(
+    pub fn attribute<'a, A: Into<&'a AttributeRef>>(
         &self,
         a: Encoded<A>,
     ) -> Result<Encoded<Entity>> {

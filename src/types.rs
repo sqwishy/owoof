@@ -2,7 +2,7 @@
 
 use std::{
     borrow::{Borrow, ToOwned},
-    convert::TryFrom,
+    convert::{AsRef, TryFrom},
     ops::Deref,
     str::FromStr,
 };
@@ -42,11 +42,11 @@ pub enum Value {
     // Timestamp(...),
 }
 
-/// A borrowing version of [Value]
+/// A borrowing version of [`Value`]
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ValueRef<'a> {
     Entity(Entity),
-    Attribute(AttributeRef<'a>),
+    Attribute(&'a AttributeRef),
     Text(&'a str),
     Integer(i64),
     Float(f64),
@@ -79,7 +79,7 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
     fn from(value: &'a Value) -> ValueRef<'a> {
         match *value {
             Value::Entity(e) => ValueRef::Entity(e),
-            Value::Attribute(ref a) => ValueRef::Attribute(a.into()),
+            Value::Attribute(ref a) => ValueRef::Attribute(&a),
             Value::Text(ref s) => ValueRef::Text(&s),
             Value::Integer(i) => ValueRef::Integer(i),
             Value::Float(f) => ValueRef::Float(f),
@@ -94,7 +94,7 @@ impl From<ValueRef<'_>> for Value {
     fn from(borrowed: ValueRef<'_>) -> Value {
         match borrowed {
             ValueRef::Entity(e) => Value::Entity(e),
-            ValueRef::Attribute(a) => Value::Attribute(a.into()),
+            ValueRef::Attribute(a) => Value::Attribute(a.to_owned()),
             ValueRef::Text(s) => Value::Text(s.to_owned()),
             ValueRef::Integer(i) => Value::Integer(i),
             ValueRef::Float(f) => Value::Float(f),
@@ -123,8 +123,8 @@ impl From<Attribute> for Value {
     }
 }
 
-impl<'a> From<AttributeRef<'a>> for ValueRef<'a> {
-    fn from(v: AttributeRef<'a>) -> Self {
+impl<'a> From<&'a AttributeRef> for ValueRef<'a> {
+    fn from(v: &'a AttributeRef) -> Self {
         ValueRef::Attribute(v)
     }
 }
@@ -270,30 +270,27 @@ pub enum EntityParseError {
 }
 
 /// An attribute name or identifier, like :db/id or :pet/name
-/// TODO provide an interface to create these from strings with no leading :
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq)]
 #[repr(transparent)]
 pub struct Attribute(String);
 
 impl Attribute {
+    /// Copies the given identifier and prepends a : to create an Attribute
+    pub fn from_ident(ident: &str) -> Self {
+        Self::from_string_unchecked(format!(":{}", ident))
+    }
+
     pub fn from_string_unchecked(s: String) -> Self {
         Attribute(s)
     }
-
-    pub fn without_prefix(&'_ self) -> &'_ str {
-        AttributeRef(&self).without_prefix()
-    }
 }
 
-// impl std::fmt::Display for Attribute {
-// }
-
 impl Deref for Attribute {
-    type Target = String;
+    type Target = AttributeRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.borrow()
+        AttributeRef::new(&self.0)
     }
 }
 
@@ -301,7 +298,7 @@ impl TryFrom<String> for Attribute {
     type Error = AttributeParseError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        parse_attribute(&s).map(drop).map(|_| Attribute(s))
+        s.parse()
     }
 }
 
@@ -309,47 +306,65 @@ impl<'a> TryFrom<&'a str> for Attribute {
     type Error = AttributeParseError;
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        parse_attribute(&s).map(Attribute::from)
+        s.parse()
     }
 }
 
-impl From<AttributeRef<'_>> for Attribute {
-    fn from(borrowed: AttributeRef<'_>) -> Attribute {
-        let AttributeRef(s) = borrowed;
-        Attribute(s.to_owned())
+impl AsRef<AttributeRef> for Attribute {
+    fn as_ref(&self) -> &AttributeRef {
+        self
     }
 }
 
-/// A borrowing version of [Attribute]
+/// A borrowing version of [`Attribute`], like Path is to PathBuf...
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq)]
 #[repr(transparent)]
-pub struct AttributeRef<'a>(&'a str);
+pub struct AttributeRef(str);
 
-impl<'a> AttributeRef<'a> {
-    pub fn without_prefix(&self) -> &'a str {
+impl AttributeRef {
+    /// uses unsafe copied from std lib's path.rs ¯\_(ツ)_/¯
+    /// ```ignore
+    /// pub fn new<S: AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
+    ///     unsafe { &*(s.as_ref() as *const OsStr as *const Path) }
+    /// }
+    /// ```
+    fn new<S: AsRef<str> + ?Sized>(s: &S) -> &Self {
+        unsafe { &*(s.as_ref() as *const str as *const AttributeRef) }
+    }
+
+    pub fn from_str<S: AsRef<str> + ?Sized>(s: &S) -> Result<&Self, AttributeParseError> {
+        parse_attribute(s.as_ref())
+    }
+
+    /// Without the leading :
+    pub fn just_the_identifier(&self) -> &str {
         &self.0[1..]
     }
 }
 
-// TODO do something similar as Path does ...
-// pub struct AttributeRef(str);
-//
-// see path.rs:
-//   pub fn new<S: AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
-//       unsafe { &*(s.as_ref() as *const OsStr as *const Path) }
-//   }
-//
-// And implement ToOwned and Borrow and finally be happy...
-
-impl<'a> From<&'a Attribute> for AttributeRef<'a> {
-    fn from(attribute: &'a Attribute) -> AttributeRef<'a> {
-        let Attribute(s) = attribute;
-        AttributeRef(s)
+impl Borrow<AttributeRef> for Attribute {
+    fn borrow(&self) -> &AttributeRef {
+        AttributeRef::new(&self.0)
     }
 }
 
-impl<'a> TryFrom<&'a str> for AttributeRef<'a> {
+impl ToOwned for AttributeRef {
+    type Owned = Attribute;
+
+    fn to_owned(&self) -> Self::Owned {
+        Attribute(self.0.to_owned())
+    }
+}
+
+// impl<'a> From<&'a Attribute> for &'a AttributeRef {
+//     fn from(attribute: &'a Attribute) -> Self {
+//         AttributeRef::new(attribute)
+//     }
+// }
+
+/* FromStr doesn't let us borrow from the input string so we can't use it for AttributeRef */
+impl<'a> TryFrom<&'a str> for &'a AttributeRef {
     type Error = AttributeParseError;
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
@@ -357,7 +372,15 @@ impl<'a> TryFrom<&'a str> for AttributeRef<'a> {
     }
 }
 
-fn parse_attribute<'a>(s: &'a str) -> Result<AttributeRef, AttributeParseError> {
+impl FromStr for Attribute {
+    type Err = AttributeParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_attribute(s).map(ToOwned::to_owned)
+    }
+}
+
+fn parse_attribute<'a>(s: &'a str) -> Result<&'a AttributeRef, AttributeParseError> {
     let rest = match s.chars().next() {
         Some(':') => &s[1..],
         Some(_) => return Err(AttributeParseError::InvalidLeader),
@@ -369,7 +392,7 @@ fn parse_attribute<'a>(s: &'a str) -> Result<AttributeRef, AttributeParseError> 
     }
 
     match rest.len() {
-        1..=255 => Ok(AttributeRef(s)),
+        1..=255 => Ok(AttributeRef::new(s)),
         _ => Err(AttributeParseError::InvalidLength),
     }
 }
@@ -386,32 +409,31 @@ pub enum AttributeParseError {
     InvalidLength,
 }
 
-impl FromStr for Attribute {
-    type Err = AttributeParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Attribute::try_from(s)
-    }
-}
-
-impl AttributeRef<'static> {
+impl AttributeRef {
     /// Panics if the attribute is invalid
-    pub fn from_static(s: &'static str) -> Self {
-        AttributeRef::try_from(s).unwrap()
-    }
-
-    pub const fn from_static_unchecked(s: &'static str) -> Self {
-        AttributeRef(s)
+    pub fn from_static(s: &'static str) -> &'static Self {
+        TryFrom::try_from(s).unwrap()
     }
 }
 
-impl<'a> Deref for AttributeRef<'a> {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0.borrow()
-    }
-}
+// impl AttributeRef<'static> {
+//     /// Panics if the attribute is invalid
+//     pub fn from_static(s: &'static str) -> Self {
+//         AttributeRef::from_str(s).unwrap()
+//     }
+//
+//     pub const fn from_static_unchecked(s: &'static str) -> Self {
+//         AttributeRef(s)
+//     }
+// }
+//
+// impl<'a> Deref for AttributeRef<'a> {
+//     type Target = str;
+//
+//     fn deref(&self) -> &Self::Target {
+//         &self.0.borrow()
+//     }
+// }
 
 impl TypeTag for Attribute {
     fn type_tag(&self) -> i64 {
@@ -419,7 +441,7 @@ impl TypeTag for Attribute {
     }
 }
 
-impl TypeTag for AttributeRef<'_> {
+impl TypeTag for &'_ AttributeRef {
     fn type_tag(&self) -> i64 {
         ATTRIBUTE_IDENTIFIER_TAG
     }
@@ -450,12 +472,12 @@ mod tests {
         assert!(Attribute::try_from(":foo/meme extra".to_string()).is_err());
         assert!(Attribute::try_from(":foo/meme".to_string()).is_ok());
 
-        assert!(AttributeRef::try_from("foo/meme").is_err());
-        assert!(AttributeRef::try_from(":foo/meme extra").is_err());
-        assert!(AttributeRef::try_from(":foo/meme").is_ok());
+        assert!(AttributeRef::from_str("foo/meme").is_err());
+        assert!(AttributeRef::from_str(":foo/meme extra").is_err());
+        assert!(AttributeRef::from_str(":foo/meme").is_ok());
 
-        assert!(AttributeRef::try_from(":f").is_ok());
-        assert!(AttributeRef::try_from(":").is_err());
+        assert!(AttributeRef::from_str(":f").is_ok());
+        assert!(AttributeRef::from_str(":").is_err());
     }
 
     #[test]

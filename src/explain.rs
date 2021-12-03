@@ -4,10 +4,7 @@ use crate::{DontWoof, Select, TypeTag};
 use rusqlite::ToSql;
 
 impl<'tx> DontWoof<'tx> {
-    pub fn explain_plan<'n, V>(
-        &self,
-        select: &Select<'n, V>,
-    ) -> rusqlite::Result<PlanExplanation>
+    pub fn explain_plan<'n, V>(&self, select: &Select<'n, V>) -> rusqlite::Result<PlanExplanation>
     where
         V: ToSql + TypeTag,
     {
@@ -19,7 +16,7 @@ impl<'tx> DontWoof<'tx> {
 
         let mut stmt = self.tx.prepare(q.as_str())?;
 
-        let rows = stmt.query_map(q.params(), |row| PlanExplainLine::from_row(&row))?;
+        let rows = stmt.query_map(q.params(), |row| PlanExplainLine::from_row(row))?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map(|lines| PlanExplanation { lines })
@@ -63,12 +60,10 @@ impl fmt::Display for Explanation {
                 op if yield_codes.contains(&op) => yields.get_mut(e).map(|y| *y = true),
                 op if next_codes.contains(&op) => indent
                     .get_mut(p2..e)
-                    .map(|slice| slice.iter_mut().for_each(|i| *i = *i + 1)),
-                "Goto" if p2 < e && (yields.get(p2) == Some(&true) || line.p1 == 1) => {
-                    indent
-                        .get_mut(p2..e)
-                        .map(|slice| slice.iter_mut().for_each(|i| *i = *i + 1))
-                }
+                    .map(|slice| slice.iter_mut().for_each(|i| *i += 1)),
+                "Goto" if p2 < e && (yields.get(p2) == Some(&true) || line.p1 == 1) => indent
+                    .get_mut(p2..e)
+                    .map(|slice| slice.iter_mut().for_each(|i| *i += 1)),
                 _ => None,
             };
         }
@@ -118,9 +113,9 @@ impl fmt::Display for ExplainLine {
             p1 = self.p1,
             p2 = self.p2,
             p3 = self.p3,
-            p4 = self.p4.as_ref().map(String::as_str).unwrap_or(""),
+            p4 = self.p4.as_deref().unwrap_or(""),
             p5 = self.p5,
-            comment = self.comment.as_ref().map(String::as_str).unwrap_or(""),
+            comment = self.comment.as_deref().unwrap_or(""),
         )
     }
 }

@@ -1,9 +1,19 @@
+//! Stuff to do with SQL query building.
+//!
+//! The [`Query`] type holds a SQL string and parameter buffer it implements [`QueryWriter`] as
+//! something you can push sql strings and parameters on to.
+//!
+//! Implementations on [`PushToQuery`] allowing types to add their particular SQL string
+//! representations to a [`QueryWriter`].
+//!
+//! Implementations on [`rusqlite::types::ToSql`] and [`rusqlite::types::FromSql`] are not here but
+//! in [`crate::driver`] instead.
 #![allow(clippy::write_with_newline)]
 
 use std::fmt::{self, Debug, Display, Write};
 use std::iter::{once, repeat};
 
-use rusqlite::types::{FromSql, ToSql};
+use rusqlite::types::ToSql;
 
 // use crate::projection::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
 // use crate::types::HasAffinity;
@@ -89,9 +99,9 @@ where
     }
 }
 
-/// Allows query string building over [`Query`] and [`IndentedQueryWriter`]
+/// Allows query string building over [`Query`] and [`IndentedQueryWriter`].
 ///
-/// P is the query parameter type.
+/// `P` is the query parameter type.
 pub trait QueryWriter<P>: Write {
     fn push_param(&mut self, p: P) -> &mut Self;
 
@@ -117,6 +127,8 @@ pub trait QueryWriter<P>: Write {
     }
 }
 
+/// Wraps a [`Query`] and also implements the [`QueryWriter`]
+/// trait but prepends lines with some prefix.
 #[derive(Debug)]
 pub struct IndentedQueryWriter<W, I> {
     writer: W,
@@ -165,7 +177,7 @@ where
     }
 }
 
-/// Implemented by things that can write themselves into a SQL query
+/// Implemented by things that can write themselves into a [`QueryWriter`].
 pub trait PushToQuery<P> {
     fn push_to_query<W>(&self, _: &mut W)
     where
@@ -210,7 +222,7 @@ where
             .iter()
             .cloned()
             .chain(self.network.constraints().iter().filter_map(|constraint| {
-                if let &Constraint::Eq { lh, rh: Match::Value(_) } = constraint {
+                if let Constraint::Eq { lh, rh: Match::Value(_) } = *constraint {
                     Some(lh)
                 } else {
                     None
@@ -252,7 +264,7 @@ where
 
         /* soup lookups first */
         for constraint in self.network.constraints().iter() {
-            if let &Constraint::Eq { lh, rh: Match::Value(ref v) } = constraint {
+            if let Constraint::Eq { lh, rh: Match::Value(ref v) } = *constraint {
                 writer
                     .nl()
                     .push(FromSoup(lh))
@@ -352,9 +364,9 @@ where
                 };
                 if 0 == *cell & flag {
                     *cell |= flag;
-                    return true;
+                    true
                 } else {
-                    return false;
+                    false
                 }
             }
         }

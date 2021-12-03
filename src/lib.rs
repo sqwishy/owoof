@@ -1,4 +1,5 @@
-#![allow(unused)]
+#![allow(clippy::match_ref_pats)]
+#![allow(clippy::option_map_unit_fn)]
 //! owoof is about interacting with a SQLite-backed database using entity-attribute-value triples
 //! and pattern matching.
 //!
@@ -111,6 +112,7 @@
 //! Check out the [`network`] module for some memes ... TODO
 //!
 //! The [`DontWoof`] type is the main interface around talking to SQLite.
+
 use thiserror::Error;
 
 pub mod driver;
@@ -136,6 +138,7 @@ pub use soup::Encoded;
 use types::TypeTag;
 pub use types::{Attribute, AttributeRef, Entity, Value, ValueRef};
 
+#[allow(unused)]
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
 
 #[derive(Debug, Error)]

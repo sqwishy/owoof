@@ -26,7 +26,7 @@ impl<'n, V> Deref for Select<'n, V> {
     type Target = GenericNetwork<V>;
 
     fn deref(&self) -> &Self::Target {
-        &self.network
+        self.network
     }
 }
 

@@ -79,8 +79,8 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
     fn from(value: &'a Value) -> ValueRef<'a> {
         match *value {
             Value::Entity(e) => ValueRef::Entity(e),
-            Value::Attribute(ref a) => ValueRef::Attribute(&a),
-            Value::Text(ref s) => ValueRef::Text(&s),
+            Value::Attribute(ref a) => ValueRef::Attribute(a),
+            Value::Text(ref s) => ValueRef::Text(s),
             Value::Integer(i) => ValueRef::Integer(i),
             Value::Float(f) => ValueRef::Float(f),
             Value::Boolean(b) => ValueRef::Boolean(b),
@@ -333,6 +333,7 @@ impl AttributeRef {
         unsafe { &*(s.as_ref() as *const str as *const AttributeRef) }
     }
 
+    /// TODO needs a better name so this doesn't collide with FromStr
     pub fn from_str<S: AsRef<str> + ?Sized>(s: &S) -> Result<&Self, AttributeParseError> {
         parse_attribute(s.as_ref())
     }
@@ -357,12 +358,6 @@ impl ToOwned for AttributeRef {
     }
 }
 
-// impl<'a> From<&'a Attribute> for &'a AttributeRef {
-//     fn from(attribute: &'a Attribute) -> Self {
-//         AttributeRef::new(attribute)
-//     }
-// }
-
 /* FromStr doesn't let us borrow from the input string so we can't use it for AttributeRef */
 impl<'a> TryFrom<&'a str> for &'a AttributeRef {
     type Error = AttributeParseError;
@@ -380,14 +375,14 @@ impl FromStr for Attribute {
     }
 }
 
-fn parse_attribute<'a>(s: &'a str) -> Result<&'a AttributeRef, AttributeParseError> {
+fn parse_attribute(s: &str) -> Result<&AttributeRef, AttributeParseError> {
     let rest = match s.chars().next() {
         Some(':') => &s[1..],
         Some(_) => return Err(AttributeParseError::InvalidLeader),
         None => return Err(AttributeParseError::MissingLeader),
     };
 
-    if let Some(_) = rest.find(|c: char| c.is_whitespace()) {
+    if rest.contains(char::is_whitespace) {
         return Err(AttributeParseError::InvalidWhitespace);
     }
 
@@ -415,25 +410,6 @@ impl AttributeRef {
         TryFrom::try_from(s).unwrap()
     }
 }
-
-// impl AttributeRef<'static> {
-//     /// Panics if the attribute is invalid
-//     pub fn from_static(s: &'static str) -> Self {
-//         AttributeRef::from_str(s).unwrap()
-//     }
-//
-//     pub const fn from_static_unchecked(s: &'static str) -> Self {
-//         AttributeRef(s)
-//     }
-// }
-//
-// impl<'a> Deref for AttributeRef<'a> {
-//     type Target = str;
-//
-//     fn deref(&self) -> &Self::Target {
-//         &self.0.borrow()
-//     }
-// }
 
 impl TypeTag for Attribute {
     fn type_tag(&self) -> i64 {

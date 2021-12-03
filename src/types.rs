@@ -271,7 +271,7 @@ pub enum EntityParseError {
 
 /// An attribute name or identifier, like :db/id or :pet/name
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Attribute(String);
 
@@ -318,7 +318,7 @@ impl AsRef<AttributeRef> for Attribute {
 
 /// A borrowing version of [`Attribute`], like Path is to PathBuf...
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct AttributeRef(str);
 

@@ -122,7 +122,6 @@ pub mod network;
 pub mod select;
 pub mod soup;
 pub mod sql;
-// pub mod sync;
 pub mod types;
 
 use rusqlite::hooks::Action;
@@ -397,7 +396,8 @@ impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
 
         /* We have to be careful here, the borrow checker doesn't know that this function must be
          * valid after calling update_hook().  We use `move` to make sure we don't borrow anything
-         * that will be dropped in this scope ... */
+         * that will be dropped in this scope ...
+         * https://github.com/rusqlite/rusqlite/issues/1048 */
         let hook = {
             let changes = Arc::clone(&changes);
             let changes_failed = Arc::clone(&changes_failed);
@@ -456,7 +456,7 @@ mod tests {
     fn rusqlite_in_memory() -> Result<rusqlite::Connection> {
         let mut db = rusqlite::Connection::open_in_memory()?;
         {
-            let mut tx = db.transaction()?;
+            let tx = db.transaction()?;
             tx.execute_batch(SCHEMA)?;
             tx.commit()?;
         }
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn test() -> anyhow::Result<()> {
         let mut db = rusqlite_in_memory()?;
-        let mut tx = db.transaction()?;
+        let tx = db.transaction()?;
         let woof = DontWoof::from(tx);
 
         let db_attr = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
@@ -481,7 +481,7 @@ mod tests {
             .assert(db_attr, woof.encode(":animal/name".parse::<Attribute>()?)?)?
             .into();
 
-        let garfield: Encoded<Entity> = woof
+        let _garfield: Encoded<Entity> = woof
             .fluent_entity()?
             .assert(pet_name, woof.encode(ValueRef::from("Garfield"))?)?
             .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
@@ -493,8 +493,8 @@ mod tests {
     #[test]
     fn test_books() -> anyhow::Result<()> {
         let mut db = rusqlite::Connection::open("/tmp/owoof-test.sqlite")?;
-        let mut tx = db.transaction()?;
-        let mut woof = DontWoof::from(tx);
+        let tx = db.transaction()?;
+        let woof = DontWoof::from(tx);
         // woof.execute_batch(SCHEMA)?;
         // import_books(&woof)?;
         // woof.into_tx().commit()?;
@@ -525,15 +525,15 @@ mod tests {
 
             let mut stmt = woof.prepare(q.as_str())?;
             let rows = stmt.query_map(q.params(), |row| {
-                use crate::driver::FromSqlAndTypeTag;
+                use crate::driver::FromTypeTagAndSqlValue;
 
                 let type_tag = row.get::<_, i64>(0)?;
                 let value = row.get_ref(1)?;
-                let a = Value::column_result(type_tag, value)?;
+                let a = Value::from_type_tag_and_sql_value(type_tag, value)?;
 
                 let type_tag = row.get::<_, i64>(2)?;
                 let value = row.get_ref(3)?;
-                let b = Value::column_result(type_tag, value)?;
+                let b = Value::from_type_tag_and_sql_value(type_tag, value)?;
 
                 Ok((a, b))
             })?;
@@ -622,15 +622,15 @@ mod tests {
 
             let mut stmt = woof.prepare(q.as_str())?;
             let rows = stmt.query_map(q.params(), |row| {
-                use crate::driver::FromSqlAndTypeTag;
+                use crate::driver::FromTypeTagAndSqlValue;
 
                 let type_tag = row.get::<_, i64>(0)?;
                 let value = row.get_ref(1)?;
-                let a = Value::column_result(type_tag, value)?;
+                let a = Value::from_type_tag_and_sql_value(type_tag, value)?;
 
                 let type_tag = row.get::<_, i64>(2)?;
                 let value = row.get_ref(3)?;
-                let b = Value::column_result(type_tag, value)?;
+                let b = Value::from_type_tag_and_sql_value(type_tag, value)?;
 
                 Ok((a, b))
             })?;
@@ -643,6 +643,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(unused)]
     fn import_books(woof: &DontWoof) -> anyhow::Result<()> {
         let mut books = std::collections::BTreeMap::<i64, Encoded<Entity>>::new();
 

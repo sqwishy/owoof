@@ -7,7 +7,7 @@ use std::str::FromStr;
 use owoof::{
     network::{Constraint, Match, Ordering, TriplesField},
     sql::PushToQuery,
-    Attribute, DontWoof, Entity, Network, Value,
+    Attribute, AttributeRef, DontWoof, Entity, Network, Value, ValueRef,
 };
 
 use anyhow::Context;
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
             let tx = db.transaction()?;
             let woof = DontWoof::from(tx);
 
-            let mut network = Network::<&Value>::default();
+            let mut network = Network::<ValueRef>::default();
             let mut vars: Vec<(&str, TriplesField)> = Vec::default();
 
             /* mend patterns into a network */
@@ -54,7 +54,7 @@ fn main() -> anyhow::Result<()> {
                         linear_find_or_append(&mut vars, unify, field)
                             .map(|link_to| field.eq(link_to.into()))
                     }
-                    Either::Right(entity) => Some(field.eq(Match::Value(entity))),
+                    Either::Right(entity) => Some(field.eq(Match::Value(ValueRef::from(entity)))),
                 })
                 .for_each(|constraint| network.add_constraint(constraint));
             });
@@ -76,10 +76,10 @@ fn main() -> anyhow::Result<()> {
                     selection.push(field);
                 }
 
-                for attribute in show.attributes.iter() {
+                for &attribute in show.attributes.iter() {
                     /* look for a triples t such that field = t.e & t.a = attribute */
                     let found = network
-                        .constraint_value_matches(attribute)
+                        .constraint_value_matches(ValueRef::from(attribute))
                         .find(|other| network.is_linked(field, other.triples().entity()).is_some())
                         .map(|other| other.triples().value());
 
@@ -110,36 +110,34 @@ fn main() -> anyhow::Result<()> {
 
             let mut stmt = woof.prepare(q.as_str())?;
 
-            let json = if select.fields().len() == 1 {
-                let rows = stmt.query_map(q.params(), |row| {
-                    use owoof::driver::FromSqlAndTypeTag;
+            use owoof::driver::{just, zipmap, ColumnIndex, FromSqlRow};
 
-                    let type_tag = row.get::<_, i64>(0)?;
-                    let sql_value = row.get_ref(1)?;
-                    let value = Value::column_result(type_tag, sql_value)?;
-                    Ok(value)
-                })?;
-                let results = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-                serde_json::to_string_pretty(&results)?
-            } else {
-                let rows = stmt.query_map(q.params(), |row| {
-                    use owoof::driver::FromSqlAndTypeTag;
+            let mut memes = find
+                .show
+                .iter()
+                .map(|show| {
+                    if show.attributes.is_empty() {
+                        owoof::driver::Either::Left(just::<Value>())
+                    } else {
+                        owoof::driver::Either::Right(zipmap::<
+                            std::collections::BTreeMap<_, _>,
+                            _,
+                            _,
+                        >(
+                            show.attributes.as_slice().iter(),
+                            just::<Value>(),
+                        ))
+                    }
+                })
+                .collect::<Vec<_>>();
 
-                    select
-                        .fields()
-                        .iter()
-                        .enumerate()
-                        .map(|(e, _)| {
-                            let type_tag = row.get::<_, i64>(e * 2)?;
-                            let sql_value = row.get_ref(e * 2 + 1)?;
-                            let value = Value::column_result(type_tag, sql_value)?;
-                            Ok(value)
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                })?;
-                let results = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-                serde_json::to_string_pretty(&results)?
-            };
+            let results = stmt
+                .query_map(q.params(), |row| {
+                    memes.as_mut_slice().from_start_of_row(&row)
+                    // just::<Value>().from_start_of_row(&row)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let json = serde_json::to_string_pretty(&results)?;
 
             println!("{}", json);
 
@@ -381,10 +379,7 @@ fn parse_value(s: &str) -> Option<owoof::Value> {
 #[derive(Debug, PartialEq)]
 struct Show<'a> {
     variable: Variable<'a>,
-    // Should probably be an Attribute but this ends up having to be used as a Value somewhere
-    // along the way and it's just slightly easier to cheat and do this in the short term ...
-    // could maybe be fixed by doing the &AttributeRef(str) thing ...
-    attributes: Vec<Value>,
+    attributes: Vec<&'a AttributeRef>,
 }
 
 fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
@@ -395,11 +390,7 @@ fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
         .and_then(parse_variable)
         .ok_or_else(|| anyhow::anyhow!("expected ?var :some/attributes..."))?;
     let attributes = parts
-        .map(|s| {
-            s.parse::<Attribute>()
-                .map(Value::from)
-                .context("parse attribute")
-        })
+        .map(|s| AttributeRef::from_str(s).context("parse attribute"))
         .collect::<anyhow::Result<_>>()?;
     Ok(Show { variable, attributes })
 }

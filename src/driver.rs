@@ -100,7 +100,7 @@ impl ColumnIndex {
     ///
     /// Returns [`rusqlite::Error::InvalidColumnIndex`] if it can't advance the index because it's
     /// [`usize::MAX`] or whatever but that will never happen so I don't know why I even exist.
-    pub fn bump(&mut self) -> rusqlite::Result<usize> {
+    pub fn bump(&mut self) -> Result<usize> {
         let idx = self.0;
         match self.0.checked_add(1) {
             Some(next) => self.0 = next,
@@ -114,9 +114,9 @@ impl ColumnIndex {
 pub trait FromSqlRow {
     type Out;
 
-    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> rusqlite::Result<Self::Out>;
+    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out>;
 
-    fn from_start_of_row(&mut self, row: &Row) -> rusqlite::Result<Self::Out> {
+    fn from_start_of_row(&mut self, row: &Row) -> Result<Self::Out> {
         self.from_sql_row(row, &mut ColumnIndex::default())
     }
 }
@@ -127,7 +127,7 @@ where
 {
     type Out = Vec<<T as FromSqlRow>::Out>;
 
-    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> rusqlite::Result<Self::Out> {
+    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
         self.iter_mut()
             .map(|item| item.from_sql_row(row, idx))
             .collect()
@@ -148,7 +148,7 @@ where
 {
     type Out = Either<<L as FromSqlRow>::Out, <R as FromSqlRow>::Out>;
 
-    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> rusqlite::Result<Self::Out> {
+    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
         match self {
             Either::Left(l) => l.from_sql_row(row, idx).map(Either::Left),
             Either::Right(l) => l.from_sql_row(row, idx).map(Either::Right),
@@ -156,9 +156,46 @@ where
     }
 }
 
+/// Given a sequence of keys (like attributes) returns an implementation of [`FromSqlRow`] that
+/// reads one [`Value`] per key and outputs an [`ObjectMap`], a type that can
+/// [`serde::Serialize`] to a map of keys zipped with values.
+///
+/// For example, with a suitable query, you might pass two attributes `":db/id"` and
+/// `":db/attribute"` you get a map like:
+///
+/// ```skip
+/// {
+///   ":db/id": "#b181a977-a8a1-2998-16df-a314c607ecde",
+///   ":db/attribute": ":db/attribute"
+/// }
+/// ```
+pub fn zip_with_keys<K>(
+    keys: K,
+) -> impl FromSqlRow<Out = ObjectMap<<K as IntoIterator>::IntoIter, Vec<Value>>>
+where
+    K: IntoIterator,
+    <K as IntoIterator>::IntoIter: Clone + ExactSizeIterator,
+{
+    let keys = keys.into_iter();
+    row_fn(move |row, idx| {
+        let keys = keys.clone();
+        std::iter::repeat(just::<Value>())
+            .map(|mut v| v.from_sql_row(row, idx))
+            .take(keys.len())
+            .collect::<Result<Vec<_>, _>>()
+            .map(|values| ObjectMap::new(keys, values))
+    })
+}
+
 /// Implements [`FromSqlRow`] for just one [`FromTypeTagAndSqlValue`].
 #[derive(Debug)]
-pub struct Just<T>(std::marker::PhantomData<T>);
+pub struct Just<T: FromTypeTagAndSqlValue>(std::marker::PhantomData<T>);
+
+impl<T: FromTypeTagAndSqlValue> Clone for Just<T> {
+    fn clone(&self) -> Self {
+        just()
+    }
+}
 
 pub fn just<T: FromTypeTagAndSqlValue>() -> Just<T> {
     Just(std::marker::PhantomData::<T>)
@@ -170,48 +207,68 @@ where
 {
     type Out = T;
 
-    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> rusqlite::Result<Self::Out> {
+    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
         let type_tag = row.get::<_, i64>(idx.bump()?)?;
         let sql_value = row.get_ref(idx.bump()?)?;
         T::from_type_tag_and_sql_value(type_tag, sql_value).map_err(From::from)
     }
 }
 
-#[derive(Debug)]
-pub struct ZipMap<A, T, O> {
-    zip: A,
-    map: T,
-    out: std::marker::PhantomData<O>,
+#[derive(Debug, Copy, Clone)]
+pub struct RowFn<F>(F);
+
+/// Create an implementation of [`FromSqlRow`] from a function.
+pub fn row_fn<O, F>(f: F) -> RowFn<F>
+where
+    F: FnMut(&Row, &mut ColumnIndex) -> Result<O>,
+{
+    RowFn(f)
 }
 
-pub fn zipmap<O, A, T>(zip: A, map: T) -> ZipMap<A, T, O>
+impl<F, O> FromSqlRow for RowFn<F>
 where
-    A: Iterator + Clone,
-    T: FromSqlRow,
-    O: FromIterator<(<A as Iterator>::Item, <T as FromSqlRow>::Out)>,
+    F: FnMut(&Row, &mut ColumnIndex) -> Result<O>,
 {
-    ZipMap { zip, map, out: std::marker::PhantomData }
-}
-
-// use std::borrow::Borrow;
-
-impl<A, T, O> FromSqlRow for ZipMap<A, T, O>
-where
-    // A: Borrow<AttributeRef> + Clone,
-    A: Iterator + Clone,
-    // <A as Iterator>::Item: Ord,
-    T: FromSqlRow,
-    O: FromIterator<(<A as Iterator>::Item, <T as FromSqlRow>::Out)>,
-{
-    // type Out = std::collections::BTreeMap<<A as Iterator>::Item, <T as FromSqlRow>::Out>;
-    // type Out = Vec<(<A as Iterator>::Item, <T as FromSqlRow>::Out)>;
     type Out = O;
 
-    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> rusqlite::Result<Self::Out> {
-        self.zip
-            .clone()
-            // .cloned()
-            .map(|key| Ok((key, self.map.from_sql_row(row, idx)?)))
-            .collect()
+    fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
+        (self.0)(row, idx)
+    }
+}
+
+/// Serializes a map by zipping `K` and `V`.
+/// Initialize this with `zip_with_keys`.
+#[derive(Debug)]
+pub struct ObjectMap<K, V>(K, V);
+
+impl<K, V> ObjectMap<K, V> {
+    pub fn new(k: K, v: V) -> ObjectMap<K, V> {
+        ObjectMap(k, v)
+    }
+}
+
+#[cfg(feature = "serde")]
+mod _serde {
+    use super::ObjectMap;
+    use serde::ser::{Serialize, SerializeMap, Serializer};
+
+    impl<K, V> Serialize for ObjectMap<K, V>
+    where
+        K: Clone + ExactSizeIterator,
+        <K as Iterator>::Item: Serialize,
+        V: Clone + IntoIterator,
+        <V as IntoIterator>::Item: Serialize,
+    {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let ObjectMap(key, value) = self;
+            let mut map = serializer.serialize_map(Some(key.len()))?;
+            for (k, v) in key.clone().zip(value.clone().into_iter()) {
+                map.serialize_entry(&k, &v)?;
+            }
+            map.end()
+        }
     }
 }

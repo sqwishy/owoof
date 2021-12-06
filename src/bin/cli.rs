@@ -110,7 +110,8 @@ fn main() -> anyhow::Result<()> {
 
             let mut stmt = woof.prepare(q.as_str())?;
 
-            use owoof::driver::{just, zipmap, ColumnIndex, FromSqlRow};
+            use owoof::driver::ObjectMap;
+            use owoof::driver::{just, row_fn, zip_with_keys, ColumnIndex, FromSqlRow};
 
             let mut memes = find
                 .show
@@ -119,14 +120,14 @@ fn main() -> anyhow::Result<()> {
                     if show.attributes.is_empty() {
                         owoof::driver::Either::Left(just::<Value>())
                     } else {
-                        owoof::driver::Either::Right(zipmap::<
-                            std::collections::BTreeMap<_, _>,
-                            _,
-                            _,
-                        >(
-                            show.attributes.as_slice().iter(),
-                            just::<Value>(),
-                        ))
+                        owoof::driver::Either::Right(zip_with_keys(&show.attributes))
+                        // owoof::driver::Either::Right(row_fn(|row, idx| {
+                        //     show.attributes
+                        //         .iter()
+                        //         .map(|_| just::<Value>().from_sql_row(row, idx))
+                        //         .collect::<Result<Vec<_>, _>>()
+                        //         .map(|values| ObjectMap::new(show.attributes.iter(), values))
+                        // }))
                     }
                 })
                 .collect::<Vec<_>>();

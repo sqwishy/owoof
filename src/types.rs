@@ -28,6 +28,11 @@ impl<T: TypeTag> TypeTag for &'_ T {
     }
 }
 
+pub trait ParseError {
+    /// Returns `true` if it's possible that the input is valid for a different type.
+    fn keep_trying(&self) -> bool;
+}
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -198,6 +203,38 @@ impl From<Vec<u8>> for Value {
 impl<'a> From<&'a [u8]> for ValueRef<'a> {
     fn from(v: &'a [u8]) -> Self {
         ValueRef::Blob(v)
+    }
+}
+
+#[cfg(feature = "serde_json")]
+pub fn parse_value(s: &str) -> Option<Value> {
+    use serde_json::from_str as json;
+
+    Option::<Value>::None
+        .or_else(|| s.parse::<Entity>().map(Value::from).ok())
+        .or_else(|| s.parse::<Attribute>().map(Value::from).ok())
+        .or_else(|| json::<String>(s).map(Value::from).ok())
+        .or_else(|| json::<i64>(s).map(Value::from).ok())
+        .or_else(|| json::<f64>(s).map(Value::from).ok())
+        .or_else(|| json::<bool>(s).map(Value::from).ok())
+        .or_else(|| s.parse::<uuid::Uuid>().map(Value::from).ok())
+}
+
+#[cfg(feature = "serde_json")]
+impl FromStr for Value {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_value(s).ok_or(())
+    }
+}
+
+#[cfg(feature = "serde_json")]
+impl TryFrom<&str> for Value {
+    type Error = ();
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -394,9 +431,9 @@ fn parse_attribute(s: &str) -> Result<&AttributeRef, AttributeParseError> {
 
 #[derive(Debug, Error)]
 pub enum AttributeParseError {
-    #[error("expected leading ':' but found something else instead")]
+    #[error("expected leading `:` but found something else instead")]
     InvalidLeader,
-    #[error("expected leading ':' but found nothing")]
+    #[error("expected leading `:` but found nothing")]
     MissingLeader,
     #[error("whitespace not allowed")]
     InvalidWhitespace,

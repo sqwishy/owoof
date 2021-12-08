@@ -488,6 +488,27 @@ pub mod either {
             }
         }
     }
+
+    impl<'a, L, R> TryFrom<&'a str> for Either<L, R>
+    where
+        L: TryFrom<&'a str>,
+        R: TryFrom<&'a str>,
+        <L as TryFrom<&'a str>>::Error: std::error::Error,
+        <R as TryFrom<&'a str>>::Error: std::error::Error,
+    {
+        type Error = (
+            <L as TryFrom<&'a str>>::Error,
+            <R as TryFrom<&'a str>>::Error,
+        );
+
+        fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+            L::try_from(s).map(Either::Left).or_else(|a_err| {
+                R::try_from(s)
+                    .map(Either::Right)
+                    .map_err(|b_err| (a_err, b_err))
+            })
+        }
+    }
 }
 
 #[cfg(test)]

@@ -3,9 +3,12 @@
 //! "I need some information."
 //! "This is Information Retrieval, not Information Dispersal."
 
+use std::ops::{Deref, DerefMut};
+
+use thiserror::Error;
+
 use crate::either::Either;
 use crate::network::{GenericNetwork, Ordering, TriplesField};
-use std::ops::{Deref, DerefMut};
 
 /* TODO call this Shape or Gather to sound less SQL? */
 #[derive(Debug, Clone, PartialEq)]
@@ -169,8 +172,61 @@ pub struct Pattern<'a, V> {
     pub value: Either<Variable<'a>, V>,
 }
 
+use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError};
+
+pub fn parse_variable_or_entity<'a>(
+    s: &'a str,
+) -> Result<Either<Variable<'a>, Entity>, (VariableParseError, EntityParseError)> {
+    s.try_into()
+}
+
+pub fn parse_variable_or_attribute<'a>(
+    s: &'a str,
+) -> Result<Either<Variable<'a>, Attribute>, (VariableParseError, AttributeParseError)> {
+    s.try_into()
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Variable<'a> {
     Any,
     Unify(&'a str),
+}
+
+pub fn parse_variable<'a>(s: &'a str) -> Result<Variable<'a>, VariableParseError> {
+    match s {
+        "" => return Err(VariableParseError::MissingLeader),
+        "?" => return Ok(Variable::Any),
+        _ if !s.starts_with("?") => return Err(VariableParseError::InvalidLeader),
+        _ => (),
+    };
+
+    if s.contains(char::is_whitespace) {
+        return Err(VariableParseError::InvalidWhitespace);
+    }
+
+    if 256 < s.len() {
+        return Err(VariableParseError::InvalidLength);
+    }
+
+    Ok(Variable::Unify(s))
+}
+
+impl<'a> TryFrom<&'a str> for Variable<'a> {
+    type Error = VariableParseError;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        parse_variable(s)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum VariableParseError {
+    #[error("expected leading `?` but found something else instead")]
+    InvalidLeader,
+    #[error("expected leading `?` but found nothing")]
+    MissingLeader,
+    #[error("whitespace not allowed")]
+    InvalidWhitespace,
+    #[error("name is either too long or too short (0..=255)")]
+    InvalidLength,
 }

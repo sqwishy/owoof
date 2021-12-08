@@ -22,7 +22,16 @@ fn main() -> anyhow::Result<()> {
     match parse_find(args) {
         Err(ArgError::Usage) => usage_and_exit(exe),
         Err(e) => {
-            eprintln!("oof! {:#}\n", e);
+            eprintln!("oof! {}", e);
+
+            use std::error::Error;
+            let mut source = e.source();
+            while let Some(e) = source {
+                eprintln!("   » {}", e);
+                source = e.source();
+            }
+
+            eprintln!("");
             usage_and_exit(exe)
         }
         Ok(find) => {
@@ -239,8 +248,8 @@ enum ArgError<'a> {
     Unknown(&'a str),
     #[error("expected value for {}", .0)]
     NeedsValue(&'a str),
-    #[error("invalid value for {}: {}", .0, .1)]
-    Invalid(&'a str, anyhow::Error),
+    #[error("invalid option for {}", .0)]
+    Invalid(&'a str, #[source] anyhow::Error),
 }
 
 impl<'a> ArgError<'a> {
@@ -262,45 +271,31 @@ fn default_limit() -> i64 {
 }
 
 fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<Pattern<'a, Value>> {
-    // TODO FromStr and error type!
     (|| {
-        let mut parts = s.splitn(3, |s: char| s.is_ascii_whitespace());
-        let e = parts.next()?;
-        let a = parts.next()?;
-        let v = parts.next()?;
-        Some(Pattern {
-            entity: parse_variable_or_entity(e)?.map_right(Value::from),
-            attribute: parse_variable_or_attribute(a)?.map_right(Value::from),
+        let (s, e) = take_no_whitespace(s)?;
+        let (s, a) = take_no_whitespace(s)?;
+        let v = s.trim();
+        return Some(Pattern {
+            entity: parse_variable_or_entity(e).ok()?.map_right(Value::from),
+            attribute: parse_variable_or_attribute(a).ok()?.map_right(Value::from),
             value: parse_variable_or_value(v)?,
-        })
+        });
+
+        fn take_no_whitespace(s: &str) -> Option<(&str, &str)> {
+            let s = s.trim_start();
+            let next = s.split_whitespace().next()?;
+            Some((&s[next.len()..], next))
+        }
     })()
-    .ok_or_else(|| anyhow::anyhow!("expected entity attribute value triple"))
+    .ok_or_else(|| anyhow::anyhow!("expected entity-attribute-value triple"))
 }
 
-fn parse_variable_or_entity<'a>(s: &'a str) -> Option<Either<Variable<'a>, Entity>> {
-    Option::<_>::None
-        .or_else(|| parse_variable(s).map(Either::Left))
-        .or_else(|| s.parse::<Entity>().ok().map(Either::Right))
-}
-
-fn parse_variable_or_attribute<'a>(s: &'a str) -> Option<Either<Variable<'a>, Attribute>> {
-    Option::<_>::None
-        .or_else(|| parse_variable(s).map(Either::Left))
-        .or_else(|| s.parse::<Attribute>().ok().map(Either::Right))
-}
+use owoof::retrieve::{parse_variable, parse_variable_or_attribute, parse_variable_or_entity};
 
 fn parse_variable_or_value<'a>(s: &'a str) -> Option<Either<Variable<'a>, Value>> {
     Option::<_>::None
-        .or_else(|| parse_variable(s).map(Either::Left))
+        .or_else(|| parse_variable(s).ok().map(Either::Left))
         .or_else(|| parse_value(s).map(Either::Right))
-}
-
-fn parse_variable<'a>(s: &'a str) -> Option<Variable<'a>> {
-    match s {
-        "?" => Some(Variable::Any),
-        v if v.starts_with("?") => Some(Variable::Unify(v)),
-        _ => None,
-    }
 }
 
 // It would be nice to move this into the library but I don't think I want to depend on serde_json
@@ -325,16 +320,18 @@ struct Show<'a> {
 }
 
 fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
-    // TODO FromStr and error type!
-    let mut parts = s.split(|s: char| s.is_ascii_whitespace());
-    let variable = parts
-        .next()
-        .and_then(parse_variable)
-        .ok_or_else(|| anyhow::anyhow!("expected ?var :some/attributes..."))?;
-    let attributes = parts
-        .map(|s| AttributeRef::from_str(s).context("parse attribute"))
-        .collect::<anyhow::Result<_>>()?;
-    Ok(Show { variable, attributes })
+    let mut parts = s.split_whitespace();
+    Ok(parts.next().unwrap_or_default())
+        .and_then(|s| parse_variable(s).with_context(|| format!("when reading {:?}", s)))
+        .and_then(|variable| {
+            parts
+                .map(|s| {
+                    AttributeRef::from_str(s).with_context(|| format!("when reading {:?}", s))
+                })
+                .collect::<anyhow::Result<_>>()
+                .map(|attributes| Show { variable, attributes })
+        })
+        .context("expected ?var :some/attributes...")
 }
 
 #[cfg(test)]

@@ -1,22 +1,17 @@
 use std::fmt;
 
-use crate::{DontWoof, Select, TypeTag};
-use rusqlite::ToSql;
+use crate::{sql::Query, DontWoof};
 
 impl<'tx> DontWoof<'tx> {
-    pub fn explain_plan<'n, V>(&self, select: &Select<'n, V>) -> rusqlite::Result<PlanExplanation>
+    pub fn explain_plan<'n, V>(&self, query: &Query<V>) -> rusqlite::Result<PlanExplanation>
     where
-        V: ToSql + TypeTag,
+        for<'p> &'p [V]: rusqlite::Params,
     {
-        use crate::sql::{Query, QueryWriter};
+        let sql = format!("EXPLAIN QUERY PLAN\n{}", query.as_str());
 
-        let mut q = Query::default();
+        let mut stmt = self.tx.prepare(&sql)?;
 
-        q.push_sql("EXPLAIN QUERY PLAN").push(select);
-
-        let mut stmt = self.tx.prepare(q.as_str())?;
-
-        let rows = stmt.query_map(q.params(), |row| PlanExplainLine::from_row(row))?;
+        let rows = stmt.query_map(query.params(), PlanExplainLine::from_row)?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map(|lines| PlanExplanation { lines })
@@ -150,7 +145,7 @@ impl fmt::Display for PlanExplanation {
                 0
             };
 
-            writeln!(f, "{:<width$}-{}", "", line, width = indent as usize)?;
+            writeln!(f, "{:<width$}»{}", "", line, width = indent as usize)?;
         }
 
         Ok(())

@@ -61,6 +61,7 @@ create table "triples"
     , primary key (e, a, v)
     ) without rowid;  -- <_<
 -- already the primary key create index "triples-eav" on "triples" (e, a, v);
+create index "triples-v" on "triples" (v);
 -- create index "triples-vae-cover" on "triples" (v, a, e);
 -- create index "triples-aev-cover" on "triples" (a, e, v);
 -- create index "triples-ave-N"  on "triples" (v, e) where a =  N;

@@ -115,11 +115,12 @@
 
 use thiserror::Error;
 
+pub mod disperse;
 pub mod driver;
 #[cfg(feature = "explain")]
 pub mod explain;
 pub mod network;
-pub mod select;
+pub mod retrieve;
 pub mod soup;
 pub mod sql;
 pub mod types;
@@ -131,11 +132,17 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub use network::{GenericNetwork, Network, OwnedNetwork};
-pub use select::Select;
-pub use soup::Encoded;
-use types::TypeTag;
-pub use types::{Attribute, AttributeRef, Entity, Value, ValueRef};
+pub use crate::either::Either;
+pub use crate::network::{GenericNetwork, Network, OwnedNetwork};
+pub use crate::retrieve::Select;
+pub use crate::soup::Encoded;
+pub use crate::types::{Attribute, AttributeRef, Entity, Value, ValueRef};
+
+pub mod traits {
+    pub use crate::sql::PushToQuery;
+}
+
+use crate::types::TypeTag;
 
 #[allow(unused)]
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
@@ -289,10 +296,9 @@ impl<'tx> DontWoof<'tx> {
             .try_for_each(|sql| self.tx.execute(&sql, []).map(drop))
     }
 
-    /// Run `PRAGMA optimize;`.
+    /// Run `PRAGMA optimize;`.  May update indexes and promote better queries.
     ///
-    /// This is mostly for troubleshooting but may change performance by updating index statistics
-    /// used by the query planner.
+    /// The SQLite documentation recommends calling this before closing a connection. (TODO where?)
     ///
     /// See <https://sqlite.org/lang_analyze.html>
     pub fn optimize(&self) -> rusqlite::Result<()> {
@@ -301,9 +307,18 @@ impl<'tx> DontWoof<'tx> {
         Ok(())
     }
 
+    // pub fn disperse<O>(&self, ...) -> rusqlite::Result<O> {
+    //     let mut stmt = self.prepare(q.as_str())?;
+
+    //     stmt.query_map(q.params(), |row| {
+    //         memes.as_mut_slice().from_start_of_row(&row)
+    //     })?
+    //     .collect::<rusqlite::Result<Vec<_>>>()?;
+    // }
+
     pub fn prefetch_attributes<V>(&self, network: &mut Network<V>) -> Result<()>
     where
-        V: TypeTag + ToSql + std::fmt::Debug,
+        V: TypeTag + ToSql,
     {
         use crate::network::{Constraint, Field, Match};
 
@@ -448,12 +463,39 @@ impl From<&FluentEntity<'_, '_>> for Encoded<Entity> {
     }
 }
 
+pub mod either {
+    pub use Either::{Left as left, Right as right};
+
+    #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
+    #[derive(Debug, PartialEq)]
+    pub enum Either<L, R> {
+        Left(L),
+        Right(R),
+    }
+
+    impl<L, R> Either<L, R> {
+        pub fn map_left<LL, F: FnOnce(L) -> LL>(self, f: F) -> Either<LL, R> {
+            match self {
+                Either::Left(l) => Either::Left(f(l)),
+                Either::Right(r) => Either::Right(r),
+            }
+        }
+
+        pub fn map_right<RR, F: FnOnce(R) -> RR>(self, f: F) -> Either<L, RR> {
+            match self {
+                Either::Left(l) => Either::Left(l),
+                Either::Right(r) => Either::Right(f(r)),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Context;
 
-    fn rusqlite_in_memory() -> Result<rusqlite::Connection> {
+    pub(crate) fn rusqlite_in_memory() -> Result<rusqlite::Connection> {
         let mut db = rusqlite::Connection::open_in_memory()?;
         {
             let tx = db.transaction()?;
@@ -605,10 +647,10 @@ mod tests {
 
         woof.prefetch_attributes(&mut network)?;
 
-        let e = woof
-            .explain_plan(&Select::from(&network).field(title).field(rating))
-            .context("explain")?;
-        eprintln!("{}", e);
+        // let e = woof
+        //     .explain_plan(&Select::from(&network).field(title).field(rating))
+        //     .context("explain")?;
+        // eprintln!("{}", e);
 
         {
             let mut q = sql::Query::default();

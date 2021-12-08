@@ -28,31 +28,31 @@
 //!
 //! This is how you might use the API to build that [`Network`].
 //! ```
-//! # use owoof::{Network, AttributeRef};
+//! # use owoof::Network;
 //! let mut network: Network = Default::default();
 //! // ?b :book/title "The Complete Calvin and Hobbes"
 //! let b = network
 //!     .fluent_triples()
-//!     .match_attribute(AttributeRef::from_static(":book/title"))
+//!     .match_attribute(":book/title")
 //!     .match_value("The Complete Calvin and Hobbes")
 //!     .entity();
 //! // ?r :review/book ?b
 //! let r = network
 //!     .fluent_triples()
-//!     .match_attribute(AttributeRef::from_static(":review/book"))
+//!     .match_attribute(":review/book")
 //!     .link_value(b)
 //!     .entity();
 //! // ?r :review/user ?u
 //! let u = network
 //!     .fluent_triples()
 //!     .link_entity(r)
-//!     .match_attribute(AttributeRef::from_static(":review/user"))
+//!     .match_attribute(":review/user")
 //!     .value();
 //! // ?r :review/score 1
 //! network
 //!     .fluent_triples()
 //!     .link_entity(r)
-//!     .match_attribute(AttributeRef::from_static(":review/book"))
+//!     .match_attribute(":review/book")
 //!     .match_value(1)
 //!     .entity();
 //! ```
@@ -61,6 +61,9 @@ use std::ops::Deref;
 use crate::{soup::Encoded, Value, ValueRef};
 
 /// A borrowing type alias for [`GenericNetwork`] using [`ValueRef`].
+///
+/// TODO this doesn't work for some reason.  The compiler keeps telling me it
+/// doesn't know what T is when I do Network::default() and shit ...
 pub type Network<'a, T = ValueRef<'a>> = GenericNetwork<T>;
 
 /// A owning types alias for [`GenericNetwork`] using [`Value`].
@@ -74,7 +77,6 @@ pub type OwnedNetwork<T = Value> = GenericNetwork<T>;
 pub struct GenericNetwork<V> {
     triples: usize,
     constraints: Vec<Constraint<V>>,
-    // decodes: Vec<()>,
 }
 
 impl<V> Default for GenericNetwork<V> {
@@ -118,6 +120,15 @@ impl<V> GenericNetwork<V> {
     pub fn fluent_triples(&mut self) -> FluentTriples<'_, V> {
         let triples = self.add_triples();
         FluentTriples { network: self, triples }
+    }
+}
+
+impl<V> GenericNetwork<V>
+where
+    V: crate::TypeTag + rusqlite::ToSql,
+{
+    pub fn prefetch_attributes(&mut self, woof: &crate::DontWoof) -> crate::Result<()> {
+        woof.prefetch_attributes(self)
     }
 }
 

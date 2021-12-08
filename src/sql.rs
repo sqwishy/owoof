@@ -19,7 +19,7 @@ use rusqlite::types::ToSql;
 // use crate::types::HasAffinity;
 
 use crate::network::{Field, Ordering, Triples, TriplesField};
-use crate::select::Select;
+use crate::retrieve::Select;
 use crate::soup::Encoded;
 use crate::types::TypeTag;
 
@@ -233,7 +233,7 @@ where
             .map(FromSoup)
             .collect::<Vec<_>>();
 
-        // ...
+        /* SELECT */
 
         let mut writer = writer.with_indent(once("SELECT ").chain(repeat("     , ")));
         for tf in self.selection.iter() {
@@ -244,6 +244,13 @@ where
                 .push(FromSoup(*tf))
                 .push_sql(".v");
         }
+
+        /* we have to select something or the statement will be malfored  */
+        if self.selection.is_empty() {
+            writer.nl().push_sql("1");
+        }
+
+        /* FROM */
 
         let mut writer = writer
             .dedent()
@@ -257,6 +264,8 @@ where
         for n in 0..self.network.triples() {
             writer.nl().push_sql(&format!(r#"triples t{}"#, n));
         }
+
+        /* WHERE */
 
         let mut writer = writer
             .dedent()
@@ -395,5 +404,40 @@ impl<P> PushToQuery<P> for Ordering {
             Ordering::Asc => write!(w, "ASC"),
             Ordering::Desc => write!(w, "DESC"),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::rusqlite_in_memory;
+    use crate::{traits::*, Network};
+
+    /* some of these examples are kind of stupid but if the network has
+     * no constraints it should probably not fetch anything -- as opposed
+     * to generate invalid sql */
+
+    #[test]
+    fn test_select_default() {
+        let db = rusqlite_in_memory().expect("rusqlite_in_memory");
+        let network: Network = Network::default();
+        let query = network.select().to_query();
+        assert!(db.prepare(query.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_select_nothing_from() {
+        let db = rusqlite_in_memory().expect("rusqlite_in_memory");
+        let mut network: Network = Network::default();
+        network.fluent_triples().match_attribute(":db/attribute");
+        let query = network.select().to_query();
+        assert!(db.prepare(query.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_select_just_limit() {
+        let db = rusqlite_in_memory().expect("rusqlite_in_memory");
+        let network: Network = Network::default();
+        let query = network.select().limit(123).to_query();
+        assert!(db.prepare(query.as_str()).is_ok());
     }
 }

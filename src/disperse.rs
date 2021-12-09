@@ -1,9 +1,23 @@
 //! To do with reading values off of `rusqlite::Row`s
-use rusqlite::Row;
+use rusqlite::{Row, ToSql};
 
 use crate::driver::{just, ColumnIndex, FromSqlRow, Result};
 use crate::either::Either;
+use crate::sql::Query;
 use crate::types::Value;
+use crate::DontWoof;
+
+impl Query<&dyn ToSql> {
+    pub fn disperse<'tx, D: FromSqlRow>(
+        &self,
+        mut wat: D,
+        db: &DontWoof<'tx>,
+    ) -> rusqlite::Result<Vec<<D as FromSqlRow>::Out>> {
+        let mut stmt = db.prepare(self.as_str())?;
+        let query = stmt.query_map(self.params(), |row| wat.from_start_of_row(&row))?;
+        query.collect::<rusqlite::Result<Vec<_>>>()
+    }
+}
 
 /// Given a sequence of keys (like attributes) returns an implementation of [`FromSqlRow`] that
 /// reads one [`Value`] per key and outputs an [`ObjectMap`], a type that can

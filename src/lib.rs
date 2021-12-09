@@ -307,15 +307,6 @@ impl<'tx> DontWoof<'tx> {
         Ok(())
     }
 
-    // pub fn disperse<O>(&self, ...) -> rusqlite::Result<O> {
-    //     let mut stmt = self.prepare(q.as_str())?;
-
-    //     stmt.query_map(q.params(), |row| {
-    //         memes.as_mut_slice().from_start_of_row(&row)
-    //     })?
-    //     .collect::<rusqlite::Result<Vec<_>>>()?;
-    // }
-
     pub fn prefetch_attributes<V>(&self, network: &mut Network<V>) -> Result<()>
     where
         V: TypeTag + ToSql,

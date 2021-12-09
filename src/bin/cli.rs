@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use owoof::{
-    either, sql::PushToQuery, Attribute, AttributeRef, DontWoof, Either, Entity, Value, ValueRef,
+    either, network::TriplesField, sql::PushToQuery, Attribute, AttributeRef, DontWoof, Either,
+    Entity, Value, ValueRef,
 };
 
 use owoof::retrieve::{self, Pattern, Variable};
@@ -48,6 +49,9 @@ fn main() -> anyhow::Result<()> {
             find.patterns
                 .iter()
                 .fold(&mut network, |n, pattern| n.add_pattern(pattern));
+
+            use owoof::disperse::zip_with_keys;
+            use owoof::driver::just;
 
             let mut retreival = vec![];
             let mut dispersal = find
@@ -99,26 +103,13 @@ fn main() -> anyhow::Result<()> {
 
             if dispersal.is_empty() {
                 debug_assert!(retreival.is_empty());
-
-                let var_constraint_counts = network
-                    .names
+                retreival = variables_with_fewest_constraints(&network)
+                    .map(|(_, field)| field)
+                    .collect();
+                dispersal = retreival
                     .iter()
-                    .map(|&(_, field)| (field, network.constraints_on(field).count()))
-                    .collect::<Vec<_>>();
-
-                if let Some(&(_, min)) =
-                    var_constraint_counts.iter().min_by_key(|(_, count)| count)
-                {
-                    retreival = var_constraint_counts
-                        .iter()
-                        .cloned()
-                        .filter_map(|(field, count)| (count == min).then(|| field))
-                        .collect();
-                    dispersal = retreival
-                        .iter()
-                        .map(|_| either::left(just::<Value>()))
-                        .collect();
-                }
+                    .map(|_| either::left(just::<Value>()))
+                    .collect();
             }
 
             /* TODO select makes network immutable (this is probably stupid),
@@ -144,17 +135,14 @@ fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            use owoof::disperse::zip_with_keys;
-            use owoof::driver::{just, FromSqlRow};
-
-            let query = select.to_query();
-            let mut stmt = woof.prepare(query.as_str())?;
-
-            let results = stmt
-                .query_map(query.params(), |row| {
-                    dispersal.as_mut_slice().from_start_of_row(&row)
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let results = select.to_query().disperse(
+                if dispersal.len() == 1 {
+                    either::left(dispersal.into_iter().next().unwrap())
+                } else {
+                    either::right(dispersal.as_mut_slice())
+                },
+                &woof,
+            )?;
             let json = serde_json::to_string_pretty(&results)?;
 
             println!("{}", json);
@@ -358,6 +346,35 @@ fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
                 .map(|attributes| Show { variable, attributes })
         })
         .context("expected ?var :some/attributes...")
+}
+
+pub fn variables_with_fewest_constraints<'a, 'n, V>(
+    network: &'a retrieve::NamedNetwork<'n, V>,
+) -> impl Iterator<Item = (&'n str, TriplesField)> + 'a
+where
+    V: PartialEq,
+{
+    let constraint_counts = network
+        .names
+        .iter()
+        .map(|&(_, field)| network.constraints_on(field).count())
+        .collect::<Vec<_>>();
+
+    constraint_counts
+        .iter()
+        .cloned()
+        .min()
+        .map(move |min| {
+            network
+                .names
+                .iter()
+                .zip(constraint_counts.into_iter())
+                .filter(move |&(_, count)| count == min)
+                .map(|(v, _)| v)
+        })
+        .into_iter()
+        .flatten()
+        .cloned()
 }
 
 #[cfg(test)]

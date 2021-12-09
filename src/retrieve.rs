@@ -152,6 +152,10 @@ impl<'n> Names<'n> {
     pub fn append(&mut self, name: &'n str, location: TriplesField) {
         self.vec.push((name, location));
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(&'n str, TriplesField)> + '_ {
+        self.vec.iter()
+    }
 }
 
 /// A data structure for specifying high-level constraints with [`NamedNetwork::add_pattern`].

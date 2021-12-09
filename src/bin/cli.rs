@@ -95,6 +95,32 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
+            /* Default --show is showing values for variables with the fewest constraints. */
+
+            if dispersal.is_empty() {
+                debug_assert!(retreival.is_empty());
+
+                let var_constraint_counts = network
+                    .names
+                    .iter()
+                    .map(|&(_, field)| (field, network.constraints_on(field).count()))
+                    .collect::<Vec<_>>();
+
+                if let Some(&(_, min)) =
+                    var_constraint_counts.iter().min_by_key(|(_, count)| count)
+                {
+                    retreival = var_constraint_counts
+                        .iter()
+                        .cloned()
+                        .filter_map(|(field, count)| (count == min).then(|| field))
+                        .collect();
+                    dispersal = retreival
+                        .iter()
+                        .map(|_| either::left(just::<Value>()))
+                        .collect();
+                }
+            }
+
             /* TODO select makes network immutable (this is probably stupid),
              * so we can't select until after we prefetch, we can't prefetch
              * until after we've gone through the --show and made a selection */

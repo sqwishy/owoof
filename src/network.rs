@@ -136,6 +136,12 @@ impl<V> GenericNetwork<V>
 where
     V: PartialEq,
 {
+    pub fn constraints_on(&self, want: TriplesField) -> impl Iterator<Item = &Constraint<V>> + '_ {
+        self.constraints.iter().filter(move |c| match c {
+            Constraint::Eq { lh, rh } => lh == &want || rh == &Match::Field(want),
+        })
+    }
+
     pub fn is_linked(&self, a: TriplesField, b: TriplesField) -> Option<&Constraint<V>> {
         self.constraints.iter().find(|c| match **c {
             Constraint::Eq { lh, rh: Match::Field(rh) } if lh == a && rh == b => true,

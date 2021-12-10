@@ -484,8 +484,6 @@ pub mod either {
     where
         L: TryFrom<&'a str>,
         R: TryFrom<&'a str>,
-        <L as TryFrom<&'a str>>::Error: std::error::Error,
-        <R as TryFrom<&'a str>>::Error: std::error::Error,
     {
         type Error = (
             <L as TryFrom<&'a str>>::Error,

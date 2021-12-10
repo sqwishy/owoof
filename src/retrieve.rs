@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::either::Either;
 use crate::network::{GenericNetwork, Ordering, TriplesField};
+use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError, Value};
 
 /* TODO call this Shape or Gather to sound less SQL? */
 #[derive(Debug, Clone, PartialEq)]
@@ -168,7 +169,10 @@ impl<'n> Names<'n> {
 /// FYI: `entity` and `attribute` *should* use [`crate::Entity`] and [`crate::Attribute`]
 /// respectively instead, but it's a bit convenient for all the fields to be homogeneous or
 /// whatever so you can add them to a `Vec` or iterate over them or otherwise interact with them
-/// all the same. */
+/// all the same.
+///
+/// [`Pattern<'a, Value>`] implements `TryFrom<&str>` but only when the `serde_json`
+/// */
 #[derive(Debug, PartialEq)]
 pub struct Pattern<'a, V> {
     pub entity: Either<Variable<'a>, V>,
@@ -176,7 +180,48 @@ pub struct Pattern<'a, V> {
     pub value: Either<Variable<'a>, V>,
 }
 
-use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError};
+#[cfg(feature = "serde_json")]
+pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseError> {
+    let (s, e) = take_no_whitespace(s);
+    let (s, a) = take_no_whitespace(s);
+    let v = s.trim();
+
+    return Ok(Pattern {
+        entity: parse_variable_or_entity(e)
+            .map_err(|(v, e)| PatternParseError::Entity(v, e))?
+            .map_right(Value::from),
+        attribute: parse_variable_or_attribute(a)
+            .map_err(|(v, a)| PatternParseError::Attribute(v, a))?
+            .map_right(Value::from),
+        value: v
+            .try_into()
+            .map_err(|(v, ())| PatternParseError::Value(v))?,
+    });
+
+    fn take_no_whitespace(s: &str) -> (&str, &str) {
+        let s = s.trim_start();
+        let next = s.split_whitespace().next().unwrap_or_default();
+        (&s[next.len()..], next)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Pattern<'a, Value> {
+    type Error = PatternParseError;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        parse_pattern(s)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum PatternParseError {
+    #[error("not a variable ({}) and not an entity ({})", .0, .01)]
+    Entity(VariableParseError, EntityParseError),
+    #[error("not a variable ({}) and not an attribute ({})", .0, .01)]
+    Attribute(VariableParseError, AttributeParseError),
+    #[error("not a variable ({}) and not a JSON value", .0)]
+    Value(VariableParseError),
+}
 
 pub fn parse_variable_or_entity<'a>(
     s: &'a str,

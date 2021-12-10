@@ -2,12 +2,9 @@
 
 use std::path::PathBuf;
 
-use owoof::{
-    either, network::TriplesField, sql::PushToQuery, Attribute, AttributeRef, DontWoof, Either,
-    Entity, Value, ValueRef,
-};
-
+use owoof::network::TriplesField;
 use owoof::retrieve::{self, Pattern, Variable};
+use owoof::{either, sql::PushToQuery, AttributeRef, DontWoof, Value, ValueRef};
 
 use anyhow::Context;
 
@@ -136,6 +133,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             let results = select.to_query().disperse(
+                /* if we map a row to a single value, don't put that value in a list */
                 if dispersal.len() == 1 {
                     either::left(dispersal.into_iter().next().unwrap())
                 } else {
@@ -216,7 +214,7 @@ where
     Ok(Find {
         patterns: patterns
             .into_iter()
-            .map(parse_pattern)
+            .map(|s| s.try_into().map_err(anyhow::Error::from))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(ArgError::invalid("<pattern>"))?,
         show: show
@@ -284,49 +282,6 @@ fn default_limit() -> i64 {
         .unwrap_or(10)
 }
 
-fn parse_pattern<'a>(s: &'a str) -> anyhow::Result<Pattern<'a, Value>> {
-    (|| {
-        let (s, e) = take_no_whitespace(s)?;
-        let (s, a) = take_no_whitespace(s)?;
-        let v = s.trim();
-        return Some(Pattern {
-            entity: parse_variable_or_entity(e).ok()?.map_right(Value::from),
-            attribute: parse_variable_or_attribute(a).ok()?.map_right(Value::from),
-            value: parse_variable_or_value(v)?,
-        });
-
-        fn take_no_whitespace(s: &str) -> Option<(&str, &str)> {
-            let s = s.trim_start();
-            let next = s.split_whitespace().next()?;
-            Some((&s[next.len()..], next))
-        }
-    })()
-    .ok_or_else(|| anyhow::anyhow!("expected entity-attribute-value triple"))
-}
-
-use owoof::retrieve::{parse_variable, parse_variable_or_attribute, parse_variable_or_entity};
-
-fn parse_variable_or_value<'a>(s: &'a str) -> Option<Either<Variable<'a>, Value>> {
-    Option::<_>::None
-        .or_else(|| parse_variable(s).ok().map(Either::Left))
-        .or_else(|| parse_value(s).map(Either::Right))
-}
-
-// It would be nice to move this into the library but I don't think I want to depend on serde_json
-// in there?  I'm not super duper sure about formalizing a text format for this.
-fn parse_value(s: &str) -> Option<owoof::Value> {
-    use serde_json::from_str as json;
-
-    Option::<Value>::None
-        .or_else(|| s.parse::<Entity>().map(Value::from).ok())
-        .or_else(|| s.parse::<Attribute>().map(Value::from).ok())
-        .or_else(|| json::<String>(s).map(Value::from).ok())
-        .or_else(|| json::<i64>(s).map(Value::from).ok())
-        .or_else(|| json::<f64>(s).map(Value::from).ok())
-        .or_else(|| json::<bool>(s).map(Value::from).ok())
-        .or_else(|| s.parse::<uuid::Uuid>().map(Value::from).ok())
-}
-
 #[derive(Debug, PartialEq)]
 struct Show<'a> {
     variable: Variable<'a>,
@@ -336,7 +291,7 @@ struct Show<'a> {
 fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
     let mut parts = s.split_whitespace();
     Ok(parts.next().unwrap_or_default())
-        .and_then(|s| parse_variable(s).with_context(|| format!("when reading {:?}", s)))
+        .and_then(|s| Variable::try_from(s).with_context(|| format!("when reading {:?}", s)))
         .and_then(|variable| {
             parts
                 .map(|s| {

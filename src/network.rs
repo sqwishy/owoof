@@ -156,7 +156,7 @@ where
         })
     }
 
-    /// There exists an equality constraint between these two fields.
+    /// Find an equality constraint between these two fields.
     pub fn is_linked(&self, a: TriplesField, b: TriplesField) -> Option<&Constraint<V>> {
         self.constraints.iter().find(|c| match **c {
             Constraint::Eq { lh, rh: Match::Field(rh) } if lh == a && rh == b => true,
@@ -165,7 +165,12 @@ where
         })
     }
 
-    pub fn is_matched(&self, a: TriplesField, v: V) -> Option<&Constraint<V>> {
+    /// Find an equality constraint between a field and a value.
+    pub fn is_matched<I: Into<V>>(&self, a: TriplesField, v: I) -> Option<&Constraint<V>> {
+        self._is_matched(a, v.into())
+    }
+
+    fn _is_matched(&self, a: TriplesField, v: V) -> Option<&Constraint<V>> {
         self.constraints.iter().find(|c| match **c {
             Constraint::Eq { lh, rh: Match::Value(ref rh) } if lh == a && rh == &v => true,
             _ => false,
@@ -180,7 +185,7 @@ where
         })
     }
 
-    /// Find/add a triples value where the triples' entity and attribute match the arguments.
+    /// Find or add triples `t` such that `t.e = field` and `t.a = attribute`.
     pub fn value_for_entity_attribute<A: Clone>(
         &mut self,
         entity: TriplesField,
@@ -189,12 +194,15 @@ where
     where
         V: From<A>,
     {
-        let found = self
-            .constraint_value_matches(V::from(attribute.clone()))
-            .find(|other| self.is_linked(entity, other.triples().entity()).is_some())
-            .map(|other| other.triples().value());
+        let value = self
+            .this_and_links_to(entity)
+            .find(|link| {
+                self.is_matched(link.triples().attribute(), V::from(attribute.clone()))
+                    .is_some()
+            })
+            .map(|link| link.triples().value());
 
-        found.unwrap_or_else(|| {
+        value.unwrap_or_else(|| {
             self.fluent_triples()
                 .link_entity(entity)
                 .match_attribute(attribute)

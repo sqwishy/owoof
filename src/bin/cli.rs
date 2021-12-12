@@ -67,27 +67,9 @@ fn main() -> anyhow::Result<()> {
 
                             Ok(either::left(just::<Value>()))
                         } else {
-                            for &attribute in show.attributes.iter() {
-                                /* find or add triples `t`
-                                 * such that `t.e = field` and `t.a = attribute` */
-                                let value = network
-                                    .this_and_links_to(field)
-                                    .map(TriplesField::triples)
-                                    .find(|t| {
-                                        network
-                                            .is_matched(t.attribute(), ValueRef::from(attribute))
-                                            .is_some()
-                                    })
-                                    .map(|triples| triples.value());
-                                let value = value.unwrap_or_else(|| {
-                                    network
-                                        .fluent_triples()
-                                        .link_entity(field)
-                                        .match_attribute(attribute)
-                                        .value()
-                                });
-                                retreival.push(value);
-                            }
+                            retreival.extend(show.attributes.iter().map(|&attribute| {
+                                network.value_for_entity_attribute(field, attribute)
+                            }));
 
                             Ok(either::right(zip_with_keys(&show.attributes)))
                         }
@@ -105,10 +87,10 @@ fn main() -> anyhow::Result<()> {
                 if show.attributes.is_empty() {
                     order_by.push((field, *ordering));
                 } else {
-                    for &attribute in show.attributes.iter() {
+                    order_by.extend(show.attributes.iter().map(|&attribute| {
                         let field = network.value_for_entity_attribute(field, attribute);
-                        order_by.push((field, *ordering));
-                    }
+                        (field, *ordering)
+                    }));
                 }
 
                 Result::<_, anyhow::Error>::Ok(())

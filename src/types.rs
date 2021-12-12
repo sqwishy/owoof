@@ -206,6 +206,12 @@ impl<'a> From<&'a [u8]> for ValueRef<'a> {
     }
 }
 
+impl<'a> From<&'_ ValueRef<'a>> for ValueRef<'a> {
+    fn from(value: &'_ ValueRef<'a>) -> ValueRef<'a> {
+        value.clone()
+    }
+}
+
 #[cfg(feature = "serde_json")]
 pub fn parse_value(s: &str) -> Option<Value> {
     use serde_json::from_str as json;
@@ -267,8 +273,7 @@ impl TryFrom<&'_ str> for Entity {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s.chars().next() {
             Some('#') => (),
-            Some(_) => return Err(EntityParseError::InvalidLeader),
-            None => return Err(EntityParseError::MissingLeader),
+            Some(_) | None => return Err(EntityParseError::Leader),
         }
 
         let (_, uuid) = s.split_at(1);
@@ -296,12 +301,10 @@ impl TypeTag for Entity {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum EntityParseError {
-    #[error("expected leading '#' but found something else instead")]
-    InvalidLeader,
-    #[error("expected leading '#' but found nothing")]
-    MissingLeader,
+    #[error("expected leading `#`")]
+    Leader,
     #[error("invalid uuid")]
     Uuid(#[from] uuid::Error),
 }
@@ -415,30 +418,27 @@ impl FromStr for Attribute {
 fn parse_attribute(s: &str) -> Result<&AttributeRef, AttributeParseError> {
     let rest = match s.chars().next() {
         Some(':') => &s[1..],
-        Some(_) => return Err(AttributeParseError::InvalidLeader),
-        None => return Err(AttributeParseError::MissingLeader),
+        Some(_) | None => return Err(AttributeParseError::Leader),
     };
 
     if rest.contains(char::is_whitespace) {
-        return Err(AttributeParseError::InvalidWhitespace);
+        return Err(AttributeParseError::Whitespace);
     }
 
     match rest.len() {
         1..=255 => Ok(AttributeRef::new(s)),
-        _ => Err(AttributeParseError::InvalidLength),
+        _ => Err(AttributeParseError::Length),
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum AttributeParseError {
-    #[error("expected leading `:` but found something else instead")]
-    InvalidLeader,
-    #[error("expected leading `:` but found nothing")]
-    MissingLeader,
+    #[error("expected leading `:`")]
+    Leader,
     #[error("whitespace not allowed")]
-    InvalidWhitespace,
+    Whitespace,
     #[error("identifier is either too long or too short (1..=255)")]
-    InvalidLength,
+    Length,
 }
 
 impl AttributeRef {

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use owoof::network::TriplesField;
 use owoof::retrieve::{self, Pattern, Variable};
-use owoof::{either, sql::PushToQuery, AttributeRef, DontWoof, Value, ValueRef};
+use owoof::{either, sql::PushToQuery, AttributeRef, DontWoof, Ordering, Value, ValueRef};
 
 use anyhow::Context;
 
@@ -43,58 +43,76 @@ fn main() -> anyhow::Result<()> {
 
             let mut network = retrieve::NamedNetwork::<ValueRef>::default();
 
-            find.patterns
-                .iter()
-                .fold(&mut network, |n, pattern| n.add_pattern(pattern));
+            for pattern in find.patterns.iter() {
+                network.add_pattern(pattern);
+            }
 
             use owoof::disperse::zip_with_keys;
             use owoof::driver::just;
 
             let mut retreival = vec![];
-            let mut dispersal = find
-                .show
-                .iter()
-                .map(|show| -> anyhow::Result<_> {
-                    let field = match &show.variable {
-                        Variable::Any => Err(anyhow::anyhow!("? does not unify")),
-                        Variable::Unify(unify) => network.names.get(unify).ok_or_else(|| {
-                            anyhow::anyhow!("{} wasn't found in the patterns to unify", unify)
-                        }),
-                    }?;
+            let mut dispersal =
+                find.show
+                    .iter()
+                    .map(|show| -> anyhow::Result<_> {
+                        let field = network.names.lookup(&show.variable).with_context(|| {
+                            anyhow::anyhow!("cannot show `{}`", &show.variable)
+                        })?;
 
-                    /* If there are no attributes, show ?var.
-                     * If attributes are given, then show the value of
-                     * those attributes where ?var is the entity. */
-                    if show.attributes.is_empty() {
-                        retreival.push(field);
+                        /* If there are no attributes, show ?var.
+                         * If attributes are given, then show the value of
+                         * those attributes where ?var is the entity. */
+                        if show.attributes.is_empty() {
+                            retreival.push(field);
 
-                        Ok(either::left(just::<Value>()))
-                    } else {
-                        for &attribute in show.attributes.iter() {
-                            /* find or add triples `t`
-                             * such that `t.e = field` and `t.a = attribute` */
-                            let found = network
-                                .constraint_value_matches(ValueRef::from(attribute))
-                                .find(|other| {
-                                    network.is_linked(field, other.triples().entity()).is_some()
-                                })
-                                .map(|other| other.triples().value());
+                            Ok(either::left(just::<Value>()))
+                        } else {
+                            for &attribute in show.attributes.iter() {
+                                /* find or add triples `t`
+                                 * such that `t.e = field` and `t.a = attribute` */
+                                let value = network
+                                    .this_and_links_to(field)
+                                    .map(TriplesField::triples)
+                                    .find(|t| {
+                                        network
+                                            .is_matched(t.attribute(), ValueRef::from(attribute))
+                                            .is_some()
+                                    })
+                                    .map(|triples| triples.value());
+                                let value = value.unwrap_or_else(|| {
+                                    network
+                                        .fluent_triples()
+                                        .link_entity(field)
+                                        .match_attribute(attribute)
+                                        .value()
+                                });
+                                retreival.push(value);
+                            }
 
-                            let show = found.unwrap_or_else(|| {
-                                network
-                                    .fluent_triples()
-                                    .link_entity(field)
-                                    .match_attribute(attribute)
-                                    .value()
-                            });
-
-                            retreival.push(show);
+                            Ok(either::right(zip_with_keys(&show.attributes)))
                         }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                        Ok(either::right(zip_with_keys(&show.attributes)))
+            let mut order_by = vec![];
+
+            find.order.iter().try_for_each(|(show, ordering)| {
+                let field = network
+                    .names
+                    .lookup(&show.variable)
+                    .with_context(|| anyhow::anyhow!("cannot order by `{}`", &show.variable))?;
+
+                if show.attributes.is_empty() {
+                    order_by.push((field, *ordering));
+                } else {
+                    for &attribute in show.attributes.iter() {
+                        let field = network.value_for_entity_attribute(field, attribute);
+                        order_by.push((field, *ordering));
                     }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                }
+
+                Result::<_, anyhow::Error>::Ok(())
+            })?;
 
             /* Default --show is showing values for variables with the fewest constraints. */
 
@@ -116,9 +134,13 @@ fn main() -> anyhow::Result<()> {
 
             let mut select = network.select();
 
-            retreival
-                .into_iter()
-                .fold(&mut select, |s, field| s.field(field));
+            for field in retreival.into_iter() {
+                select.field(field);
+            }
+
+            for o in order_by.into_iter() {
+                select.order_by(o);
+            }
 
             select.limit(find.limit);
 
@@ -170,7 +192,7 @@ struct Find<'a> {
     path: PathBuf,
     show: Vec<Show<'a>>,
     patterns: Vec<Pattern<'a, Value>>,
-    // order: Vec<(&'a str, Vec<AttributeRef<'a>>, Ordering)>,
+    order: Vec<(Show<'a>, Ordering)>,
     limit: i64,
     explain: bool,
     // explain_plan: bool,
@@ -184,9 +206,9 @@ where
     let mut db = Option::<&str>::None;
     let mut limit = Option::<&str>::None;
     // let mut mode = QueryMode::Find;
-    // let mut order = vec![];
     let mut patterns = vec![];
     let mut show = vec![];
+    let mut order = vec![];
     let mut explain = false;
 
     while let Some(arg) = args.next() {
@@ -200,6 +222,14 @@ where
             }
             "--show" => {
                 show.push(args.next().ok_or(ArgError::NeedsValue(arg))?);
+            }
+            "--asc" => {
+                let arg = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((arg, Ordering::Asc));
+            }
+            "--desc" => {
+                let arg = args.next().ok_or(ArgError::NeedsValue(arg))?;
+                order.push((arg, Ordering::Desc));
             }
             "--explain" => explain = true,
             "--" => {
@@ -222,7 +252,6 @@ where
             .map(parse_show)
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(ArgError::invalid("--show"))?,
-
         path: db
             .map(|s| {
                 s.parse()
@@ -230,17 +259,17 @@ where
                     .map_err(ArgError::invalid("--db"))
             })
             .unwrap_or_else(|| Ok(default_db_path()))?,
-        // order: order
-        //     .into_iter()
-        //     .map(|(ordering, ord)| {
-        //         parse_show(ordering)
-        //             .map(|(var, attrs)| (var, attrs, ord))
-        //             .map_err(ArgError::invalid(match ord {
-        //                 owoof::Ordering::Asc => "--asc",
-        //                 owoof::Ordering::Desc => "--desc",
-        //             }))
-        //     })
-        //     .collect::<Result<Vec<_>, _>>()?,
+        order: order
+            .into_iter()
+            .map(|(show, ord)| {
+                parse_show(show)
+                    .map(|show| (show, ord))
+                    .map_err(ArgError::invalid(match ord {
+                        Ordering::Asc => "--asc",
+                        Ordering::Desc => "--desc",
+                    }))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
         limit: limit
             .map(|s| {
                 s.parse()
@@ -330,28 +359,4 @@ where
         .into_iter()
         .flatten()
         .cloned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test() {
-        assert_eq!(parse_variable("1234"), None);
-        assert_eq!(parse_variable("?foo"), Some(Variable::Unify("?foo")));
-        assert_eq!(parse_variable("?"), Some(Variable::Any));
-    }
-
-    #[test]
-    fn test_parse_pattern() {
-        assert_eq!(
-            parse_pattern("? ? ?asdf").unwrap(),
-            Pattern {
-                entity: Either::Left(Variable::Any),
-                attribute: Either::Left(Variable::Any),
-                value: Either::Left(Variable::Unify("?asdf")),
-            }
-        );
-    }
 }

@@ -129,11 +129,11 @@ use rusqlite::hooks::Action;
 use rusqlite::{OptionalExtension, ToSql};
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, Mutex};
 
 pub use crate::either::Either;
-pub use crate::network::{GenericNetwork, Network, OwnedNetwork};
+pub use crate::network::{GenericNetwork, Network, Ordering, OwnedNetwork};
 pub use crate::retrieve::Select;
 pub use crate::soup::Encoded;
 pub use crate::types::{Attribute, AttributeRef, Entity, Value, ValueRef};
@@ -262,7 +262,7 @@ impl<'tx> DontWoof<'tx> {
                 std::mem::swap::<Vec<Change>>(mutex.as_mut(), swap.as_mut());
             } else {
                 debug_assert!(false, "failed to lock changes");
-                self.changes_failed.store(true, Ordering::SeqCst);
+                self.changes_failed.store(true, atomic::Ordering::SeqCst);
                 return Ok(());
             }
 
@@ -275,7 +275,7 @@ impl<'tx> DontWoof<'tx> {
             result.map(drop)
         } else {
             debug_assert!(false, "failed to borrow changes_swap");
-            self.changes_failed.store(true, Ordering::SeqCst);
+            self.changes_failed.store(true, atomic::Ordering::SeqCst);
             Ok(())
         }
     }
@@ -366,7 +366,7 @@ impl<'tx> std::ops::Deref for HookedTransaction<'tx> {
 impl<'tx> HookedTransaction<'tx> {
     fn new<F>(tx: rusqlite::Transaction<'tx>, hook: F) -> Self
     where
-        F: FnMut(Action, &str, &str, i64) + Send,
+        F: FnMut(Action, &str, &str, i64) + Send + 'static,
     {
         tx.update_hook(Some(hook));
         HookedTransaction(Some(tx))
@@ -400,10 +400,6 @@ impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
         let changes = Arc::new(Mutex::new(Vec::<Change>::default()));
         let changes_failed = Arc::new(AtomicBool::new(false));
 
-        /* We have to be careful here, the borrow checker doesn't know that this function must be
-         * valid after calling update_hook().  We use `move` to make sure we don't borrow anything
-         * that will be dropped in this scope ...
-         * https://github.com/rusqlite/rusqlite/issues/1048 */
         let hook = {
             let changes = Arc::clone(&changes);
             let changes_failed = Arc::clone(&changes_failed);
@@ -412,7 +408,7 @@ impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
                     if let Ok(ref mut mutex) = changes.try_lock() {
                         mutex.push((action, rowid));
                     } else {
-                        changes_failed.store(true, Ordering::SeqCst);
+                        changes_failed.store(true, atomic::Ordering::SeqCst);
                     }
                 }
             }

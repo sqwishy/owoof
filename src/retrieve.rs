@@ -3,13 +3,17 @@
 //! "I need some information."
 //! "This is Information Retrieval, not Information Dispersal."
 
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use thiserror::Error;
 
 use crate::either::Either;
-use crate::network::{GenericNetwork, Ordering, TriplesField};
-use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError, Value};
+use crate::network::{GenericNetwork, Ordering, Triples, TriplesField};
+use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError};
+
+#[cfg(feature = "serde_json")]
+use crate::types::Value;
 
 /* TODO call this Shape or Gather to sound less SQL? */
 #[derive(Debug, Clone, PartialEq)]
@@ -84,7 +88,10 @@ impl<'n, V> NamedNetwork<'n, V> {
 impl<'n, 'v> NamedNetwork<'n, crate::ValueRef<'v>> {
     /// Constrain a [`GenericNetwork`] using the given [`Pattern`], unifying variables where
     /// appropriate.
-    pub fn add_pattern(&mut self, pattern: &'v Pattern<'n, crate::Value>) -> &mut Self {
+    pub fn add_pattern<V>(&mut self, pattern: &'v Pattern<'n, V>) -> Triples
+    where
+        crate::ValueRef<'v>: From<&'v V>,
+    {
         use crate::network::Match;
 
         let t = self.network.add_triples();
@@ -108,7 +115,7 @@ impl<'n, 'v> NamedNetwork<'n, crate::ValueRef<'v>> {
         })
         .for_each(|constraint| self.network.add_constraint(constraint));
 
-        self
+        t
     }
 }
 
@@ -157,6 +164,21 @@ impl<'n> Names<'n> {
     pub fn iter(&self) -> impl Iterator<Item = &(&'n str, TriplesField)> + '_ {
         self.vec.iter()
     }
+
+    pub fn lookup(&self, v: &Variable<'_>) -> Result<TriplesField, NamesLookupError> {
+        match v {
+            Variable::Any => Err(NamesLookupError::DoesNotUnify),
+            Variable::Unify(unify) => self.get(unify).ok_or(NamesLookupError::Unmatched),
+        }
+    }
+}
+
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum NamesLookupError {
+    #[error("does not unify")]
+    DoesNotUnify,
+    #[error("variable not previously declared")]
+    Unmatched,
 }
 
 /// A data structure for specifying high-level constraints with [`NamedNetwork::add_pattern`].
@@ -205,6 +227,7 @@ pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseE
     }
 }
 
+#[cfg(feature = "serde_json")]
 impl<'a> TryFrom<&'a str> for Pattern<'a, Value> {
     type Error = PatternParseError;
 
@@ -215,9 +238,9 @@ impl<'a> TryFrom<&'a str> for Pattern<'a, Value> {
 
 #[derive(Debug, Error)]
 pub enum PatternParseError {
-    #[error("not a variable ({}) and not an entity ({})", .0, .01)]
+    #[error("not a variable ({}) and not an entity ({})", .0, .1)]
     Entity(VariableParseError, EntityParseError),
-    #[error("not a variable ({}) and not an attribute ({})", .0, .01)]
+    #[error("not a variable ({}) and not an attribute ({})", .0, .1)]
     Attribute(VariableParseError, AttributeParseError),
     #[error("not a variable ({}) and not a JSON value", .0)]
     Value(VariableParseError),
@@ -241,20 +264,29 @@ pub enum Variable<'a> {
     Unify(&'a str),
 }
 
+impl<'a> fmt::Display for Variable<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Variable::Any => write!(f, "?"),
+            Variable::Unify(v) => write!(f, "{}", v),
+        }
+    }
+}
+
 pub fn parse_variable<'a>(s: &'a str) -> Result<Variable<'a>, VariableParseError> {
     match s {
-        "" => return Err(VariableParseError::MissingLeader),
+        "" => return Err(VariableParseError::Leader),
         "?" => return Ok(Variable::Any),
-        _ if !s.starts_with("?") => return Err(VariableParseError::InvalidLeader),
+        _ if !s.starts_with("?") => return Err(VariableParseError::Leader),
         _ => (),
     };
 
     if s.contains(char::is_whitespace) {
-        return Err(VariableParseError::InvalidWhitespace);
+        return Err(VariableParseError::Whitespace);
     }
 
     if 256 < s.len() {
-        return Err(VariableParseError::InvalidLength);
+        return Err(VariableParseError::Length);
     }
 
     Ok(Variable::Unify(s))
@@ -268,14 +300,37 @@ impl<'a> TryFrom<&'a str> for Variable<'a> {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum VariableParseError {
-    #[error("expected leading `?` but found something else instead")]
-    InvalidLeader,
-    #[error("expected leading `?` but found nothing")]
-    MissingLeader,
+    #[error("expected leading `?`")]
+    Leader,
     #[error("whitespace not allowed")]
-    InvalidWhitespace,
+    Whitespace,
     #[error("name is either too long or too short (0..=255)")]
-    InvalidLength,
+    Length,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test() {
+        assert_eq!(parse_variable("1234"), Err(VariableParseError::Leader));
+        assert_eq!(parse_variable("?foo"), Ok(Variable::Unify("?foo")));
+        assert_eq!(parse_variable("?"), Ok(Variable::Any));
+    }
+
+    #[test]
+    #[cfg(feature = "serde_json")]
+    fn test_parse_pattern() {
+        assert_eq!(
+            parse_pattern("? ? ?asdf").unwrap(),
+            Pattern {
+                entity: Either::Left(Variable::Any),
+                attribute: Either::Left(Variable::Any),
+                value: Either::Left(Variable::Unify("?asdf")),
+            }
+        );
+    }
 }

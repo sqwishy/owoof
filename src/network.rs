@@ -136,16 +136,38 @@ impl<V> GenericNetwork<V>
 where
     V: PartialEq,
 {
-    pub fn constraints_on(&self, want: TriplesField) -> impl Iterator<Item = &Constraint<V>> + '_ {
-        self.constraints.iter().filter(move |c| match c {
-            Constraint::Eq { lh, rh } => lh == &want || rh == &Match::Field(want),
+    /// Shorthand for `iter::once(field).chain(network.links_to(field))`.
+    pub fn this_and_links_to(&self, on: TriplesField) -> impl Iterator<Item = TriplesField> + '_ {
+        std::iter::once(on).chain(self.links_to(on))
+    }
+
+    /// All [`TriplesField`] with equality constraints to the given [`TriplesField`].
+    pub fn links_to(&self, on: TriplesField) -> impl Iterator<Item = TriplesField> + '_ {
+        self.constraints.iter().filter_map(move |c| match *c {
+            Constraint::Eq { lh, rh: Match::Field(rh) } if lh == on => Some(rh),
+            Constraint::Eq { lh, rh: Match::Field(rh) } if rh == on => Some(lh),
+            _ => None,
         })
     }
 
+    pub fn constraints_on(&self, on: TriplesField) -> impl Iterator<Item = &Constraint<V>> + '_ {
+        self.constraints.iter().filter(move |c| match c {
+            Constraint::Eq { lh, rh } => lh == &on || rh == &Match::Field(on),
+        })
+    }
+
+    /// There exists an equality constraint between these two fields.
     pub fn is_linked(&self, a: TriplesField, b: TriplesField) -> Option<&Constraint<V>> {
         self.constraints.iter().find(|c| match **c {
             Constraint::Eq { lh, rh: Match::Field(rh) } if lh == a && rh == b => true,
             Constraint::Eq { lh, rh: Match::Field(rh) } if lh == b && rh == a => true,
+            _ => false,
+        })
+    }
+
+    pub fn is_matched(&self, a: TriplesField, v: V) -> Option<&Constraint<V>> {
+        self.constraints.iter().find(|c| match **c {
+            Constraint::Eq { lh, rh: Match::Value(ref rh) } if lh == a && rh == &v => true,
             _ => false,
         })
     }
@@ -155,6 +177,28 @@ where
         self.constraints.iter().filter_map(move |c| match c {
             Constraint::Eq { lh, rh } if rh == &v => Some(*lh),
             _ => None,
+        })
+    }
+
+    /// Find/add a triples value where the triples' entity and attribute match the arguments.
+    pub fn value_for_entity_attribute<A: Clone>(
+        &mut self,
+        entity: TriplesField,
+        attribute: A,
+    ) -> TriplesField
+    where
+        V: From<A>,
+    {
+        let found = self
+            .constraint_value_matches(V::from(attribute.clone()))
+            .find(|other| self.is_linked(entity, other.triples().entity()).is_some())
+            .map(|other| other.triples().value());
+
+        found.unwrap_or_else(|| {
+            self.fluent_triples()
+                .link_entity(entity)
+                .match_attribute(attribute)
+                .value()
         })
     }
 }

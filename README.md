@@ -1,4 +1,4 @@
-Owoof
+owoof
 =====
 
 [<img alt="github" src="https://img.shields.io/badge/github-sqwishy/owoof-076678?style=for-the-badge&labelColor=282828&logo=github" height="22">](https://github.com/sqwishy/owoof)

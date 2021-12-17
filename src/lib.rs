@@ -147,6 +147,7 @@ use crate::types::TypeTag;
 #[allow(unused)]
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
 
+/// TODO we only have one variant so what's the point?
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("sql error")]
@@ -493,6 +494,19 @@ pub mod either {
                     .map_err(|b_err| (a_err, b_err))
             })
         }
+    }
+}
+
+/// A derpy meme that copies [`rusqlite::OptionalExtension`].
+pub trait Optional<T> {
+    fn optional(self) -> Result<Option<T>>;
+}
+
+impl<T> Optional<T> for Result<T, Error> {
+    fn optional(self) -> Result<Option<T>> {
+        self.map_err(|Error::Sql(err)| err)
+            .optional()
+            .map_err(Error::from)
     }
 }
 

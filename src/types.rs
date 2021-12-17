@@ -3,6 +3,7 @@
 use std::{
     borrow::{Borrow, ToOwned},
     convert::{AsRef, TryFrom},
+    fmt,
     ops::Deref,
     str::FromStr,
 };
@@ -249,8 +250,8 @@ impl TryFrom<&str> for Value {
 #[repr(transparent)]
 pub struct Entity(Uuid);
 
-impl std::fmt::Display for Entity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Entity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let buf = &mut [0; 37];
         buf[0] = 0x23; // a # character
         self.0.to_hyphenated_ref().encode_lower(&mut buf[1..]);
@@ -382,6 +383,20 @@ impl AttributeRef {
     pub fn just_the_identifier(&self) -> &str {
         &self.0[1..]
     }
+
+    /// The identifier with the leading :
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Everything after the last `/` in the identifier,
+    /// or just the identifier if no `/` is in the attribute.
+    pub fn tail(&self) -> &str {
+        self.just_the_identifier()
+            .rsplit('/')
+            .next()
+            .unwrap_or(self.just_the_identifier())
+    }
 }
 
 impl Borrow<AttributeRef> for Attribute {
@@ -395,6 +410,12 @@ impl ToOwned for AttributeRef {
 
     fn to_owned(&self) -> Self::Owned {
         Attribute(self.0.to_owned())
+    }
+}
+
+impl fmt::Display for AttributeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

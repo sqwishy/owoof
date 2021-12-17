@@ -10,8 +10,12 @@ description = "Uses SQLite to store data and a datalog-like format to query it. 
 keywords = ["datalog", "sqlite"]
 
 [[bin]]
-name = "cli"
+name = "owoof"
 required-features = ["cli"]
+
+[[bin]]
+name = "owoof-csv"
+required-features = ["cli", "csv", "atty"]
 
 [features]
 default = ["explain"]
@@ -29,8 +33,5 @@ anyhow     = { version = "1", optional = true }
 serde      = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
 either     = { version = "1", optional = true }
-
-[dev-dependencies]
-anyhow = { version = "1" }
-serde = { version = "1", features = ["derive"] }
-csv = "1"
+csv        = { version = "1", optional = true }
+atty       = { version = "0.2", optional = true }

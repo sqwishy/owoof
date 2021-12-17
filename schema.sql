@@ -9,6 +9,7 @@ create table "soup"
     ( rowid  integer primary key
     , t      integer not null
     , v      blob    not null
+    -- , rc     integer not null
     -- , check (t != 1 OR length(v) == 16)
     );
 -- create unique index "soup-tv-cover" on "soup" (t, v);

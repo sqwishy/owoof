@@ -1,9 +1,7 @@
-//! import
-#![allow(unused)]
+//! import one csv into a sqlite database with owoof
 
 use std::borrow::Cow;
 use std::error::Error;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::{fs, io, iter};
 
@@ -195,6 +193,8 @@ fn usage_and_exit(exe: &str) -> ! {
     eprintln!("<mappings...> is a sequence that arguments that map csv headers to attributes.");
     eprintln!("\t':pet/name pet_name'\twill read values in the column pet_name and assert them with the :pet/name attribute");
     eprintln!("\t':pet/name'         \twill defaults the column name to `name`, the part after / with non-alphabet characters replaced with _");
+    eprintln!("");
+    eprintln!("We try to convert values into an entity, attribute, number, or uuid before giving up and just inserting it as text.");
     std::process::exit(2);
 }
 

@@ -1,4 +1,23 @@
-//! [`rusqlite::types::ToSql`] and [`rusqlite::types::FromSql`] implementations on [`crate::types`]
+//! [`rusqlite::types::ToSql`] and [`rusqlite::types::FromSql`] implementations on
+//! [`crate::types`].  And the [`TypeTag`] & [`FromTypeTagAndSqlValue`] traits for reading for
+//! loading application types from a type-tag and SQLite value pair.
+//!
+//! ## The TypeTag trait
+//!
+//! Values are meant to be stored along with enough information to describe what corresponding rust
+//! type they were before serialized into the SQLite database.
+//!
+//! For instance, we might store a date-time as an integer of the number of milliseconds from an
+//! epoch.  But, when we get it back, we don't want an integer, we want our date-time.
+//!
+//! **The type tag is in-band information that allows us to discriminate between integers and
+//! date-times, or other scalar types with the same SQLite representation.**  This way, users don't
+//! need to know or expect anything about the type of what they're querying and they should get the
+//! same values out as what was put in.
+//!
+//! **Another consideration for this feature is just to implement orderability properly.**  If I query
+//! date-times since `A` I don't also want to search for integers greater than the integer
+//! representation of the date-time `A`.
 use rusqlite::types::{
     FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef as SqlValueRef,
 };
@@ -6,6 +25,11 @@ use rusqlite::types::{
 pub use rusqlite::{Result, Row};
 
 use crate::types::{Attribute, AttributeRef, Entity, Value, ValueRef};
+
+pub(crate) const PLAIN_TAG: i64 = 0;
+pub(crate) const ENTITY_ID_TAG: i64 = 1;
+pub(crate) const ATTRIBUTE_IDENTIFIER_TAG: i64 = 2;
+// pub const USER_TAG: i64 = 256;
 
 impl ToSql for Value {
     fn to_sql(&self) -> Result<ToSqlOutput> {
@@ -67,6 +91,57 @@ impl<'a> FromSql for Attribute {
     }
 }
 
+/// See the module level documentation in [`crate::driver`] about this.
+pub trait TypeTag {
+    fn type_tag(&self) -> i64;
+}
+
+// Wow! Excellent meme!
+impl<T: TypeTag> TypeTag for &'_ T {
+    fn type_tag(&self) -> i64 {
+        (*self).type_tag()
+    }
+}
+
+impl TypeTag for Entity {
+    fn type_tag(&self) -> i64 {
+        ENTITY_ID_TAG
+    }
+}
+
+impl TypeTag for Attribute {
+    fn type_tag(&self) -> i64 {
+        ATTRIBUTE_IDENTIFIER_TAG
+    }
+}
+
+impl TypeTag for &'_ AttributeRef {
+    fn type_tag(&self) -> i64 {
+        ATTRIBUTE_IDENTIFIER_TAG
+    }
+}
+
+impl TypeTag for Value {
+    fn type_tag(&self) -> i64 {
+        match self {
+            Value::Entity(e) => e.type_tag(),
+            Value::Attribute(a) => a.type_tag(),
+            _ => PLAIN_TAG,
+        }
+    }
+}
+
+impl TypeTag for ValueRef<'_> {
+    fn type_tag(&self) -> i64 {
+        match self {
+            ValueRef::Entity(e) => e.type_tag(),
+            ValueRef::Attribute(a) => a.type_tag(),
+            _ => PLAIN_TAG,
+        }
+    }
+}
+
+/// Make `Self` from a type tag (`i64`) and a [`rusqlite::types::ValueRef`].
 pub trait FromTypeTagAndSqlValue: Sized {
     fn from_type_tag_and_sql_value(type_tag: i64, value: SqlValueRef<'_>) -> FromSqlResult<Self>;
 }
@@ -74,11 +149,9 @@ pub trait FromTypeTagAndSqlValue: Sized {
 impl FromTypeTagAndSqlValue for Value {
     fn from_type_tag_and_sql_value(type_tag: i64, value: SqlValueRef<'_>) -> FromSqlResult<Self> {
         match type_tag {
-            crate::types::ENTITY_ID_TAG => Entity::column_result(value).map(Value::Entity),
-            crate::types::ATTRIBUTE_IDENTIFIER_TAG => {
-                Attribute::column_result(value).map(Value::Attribute)
-            }
-            crate::types::PLAIN_TAG => match value {
+            ENTITY_ID_TAG => Entity::column_result(value).map(Value::Entity),
+            ATTRIBUTE_IDENTIFIER_TAG => Attribute::column_result(value).map(Value::Attribute),
+            PLAIN_TAG => match value {
                 SqlValueRef::Null => todo!(),
                 SqlValueRef::Integer(i) => Ok(Value::Integer(i)),
                 SqlValueRef::Real(f) => Ok(Value::Float(f)),
@@ -111,7 +184,11 @@ impl ColumnIndex {
     }
 }
 
-/// Adapts a [`rusqlite::Row`] to a rust type implementing [`FromTypeTagAndSqlValue`]
+/// A factory to make a [`FromSqlRow::Out`] from a [`rusqlite::Row`] using
+/// [`FromSqlRow::from_start_of_row`].
+/// For example `&[T]` (where `T` implements [`FromSqlRow`])
+/// also implements [`FromSqlRow`] where
+/// `FromSqlRow::Out = Vec<<T as FromSqlRow>::Out>`
 pub trait FromSqlRow {
     type Out;
 
@@ -135,6 +212,42 @@ where
     }
 }
 
+macro_rules! _from_sql_row_fixed {
+    ( $($n:expr)* ) => {
+        $(
+        impl<T: FromSqlRow> FromSqlRow for [T; $n] {
+            type Out = Vec<<T as FromSqlRow>::Out>;
+
+            fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
+                self.as_mut_slice().from_sql_row(row, idx)
+            }
+        }
+        )*
+    };
+}
+
+_from_sql_row_fixed!(0 1 2 3 4 5 6 7 8 9);
+
+macro_rules! _from_sql_row_tuple {
+    ( ) => {};
+    ( $t:ident $( $rest:ident )* ) => {
+        impl<$t: FromSqlRow, $($rest: FromSqlRow),*> FromSqlRow for ($t, $($rest),*)
+        {
+            type Out = (<$t as FromSqlRow>::Out, $(<$rest as FromSqlRow>::Out),*);
+
+            fn from_sql_row(&mut self, row: &Row, idx: &mut ColumnIndex) -> Result<Self::Out> {
+                #[allow(non_snake_case)]
+                let ($t, $($rest),*) = self;
+                Ok(($t.from_sql_row(row, idx)?, $( $rest.from_sql_row(row, idx)? ),*))
+            }
+        }
+
+        _from_sql_row_tuple!($($rest)*);
+    };
+}
+
+_from_sql_row_tuple!(A B C D E F G H I);
+
 /// Implements [`FromSqlRow`] for just one [`FromTypeTagAndSqlValue`].
 #[derive(Debug)]
 pub struct Just<T: FromTypeTagAndSqlValue>(std::marker::PhantomData<T>);
@@ -144,6 +257,8 @@ impl<T: FromTypeTagAndSqlValue> Clone for Just<T> {
         just()
     }
 }
+
+impl<T: FromTypeTagAndSqlValue> Copy for Just<T> {}
 
 pub fn just<T: FromTypeTagAndSqlValue>() -> Just<T> {
     Just(std::marker::PhantomData::<T>)

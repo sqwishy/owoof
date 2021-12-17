@@ -2,7 +2,9 @@ max_width=99
 struct_lit_width=99
 struct_variant_width=99
 match_arm_leading_pipes="Preserve"
+edition='2021'
 # I have to use nightly for this???
 # enum_discrim_align_threshold=8
 # struct_field_align_threshold=8
-edition='2021'
+# ???????????
+# format_code_in_doc_comments=true

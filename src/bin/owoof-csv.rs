@@ -110,7 +110,7 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
             .map(|(&idx, a)| {
                 let text = record.get(idx).context("no value")?;
                 woof.encode(parse_value(text))
-                    .and_then(|v| woof.assert(e, a, v))
+                    .and_then(|v| woof.assert(e, a, v).map(drop))
                     .with_context(|| format!("failed to assert {:?}", text))
             })
             .zip(args.mappings.iter())

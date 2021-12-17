@@ -1,7 +1,31 @@
 //! A higher-level way of adding constraints to a [`GenericNetwork`].
 //!
-//! "I need some information."
-//! "This is Information Retrieval, not Information Dispersal."
+//! [`NamedNetwork`] is just a network paired with a list of variables that map to triples-fields
+//! in the network.
+//!
+//! [`NamedNetwork::add_pattern`] allows adding a constraint from a [`Pattern`] which can be
+//! parsed from a string when the `serde_json` feature is enabled (required to parse the value
+//! stuff).
+//!
+//! ```
+//! # use owoof::{NamedNetwork, Value, ValueRef, Pattern};
+//! #[cfg(feature = "serde_json")]
+//! {
+//! let mut network = NamedNetwork::<_>::default();
+//! let pattern = r#"?p :pet/name "Garfield""#
+//!         .try_into().expect("parse pattern");
+//! network.add_pattern(&pattern);
+//! }
+//! ```
+//!
+//! One nice thing about this is that variables are automatically unified.
+//!
+//! So if I add another pattern `?p :animal/name "Cat"`, there will be a constraint linking the
+//! `?p` variables together.
+//!
+//! > "I need some information."
+//! >
+//! > "This is Information Retrieval, not Information [Dispersal](crate::disperse)."
 
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -16,8 +40,11 @@ use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError};
 use crate::types::Value;
 
 /* TODO call this Shape or Gather to sound less SQL? */
+/// LIMIT, ORDER BY, and SELECT clauses forming an entire SELECT statement.
+/// Needed to actually query for stuff using a [`GenericNetwork`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Select<'n, V> {
+    /* TODO Does this really needs to be here? */
     pub(crate) network: &'n GenericNetwork<V>,
     pub(crate) selection: Vec<TriplesField>,
     pub(crate) order_by: Vec<(TriplesField, Ordering)>,
@@ -193,8 +220,8 @@ pub enum NamesLookupError {
 /// whatever so you can add them to a `Vec` or iterate over them or otherwise interact with them
 /// all the same.
 ///
-/// [`Pattern<'a, Value>`] implements `TryFrom<&str>` but only when the `serde_json`
-/// */
+/// [`Pattern<'a, Value>`] implements `TryFrom<&str>` but only when the `serde_json` feature is
+/// enabled.
 #[derive(Debug, PartialEq)]
 pub struct Pattern<'a, V> {
     pub entity: Either<Variable<'a>, V>,
@@ -203,6 +230,7 @@ pub struct Pattern<'a, V> {
 }
 
 #[cfg(feature = "serde_json")]
+/// Requires the `serde_json` feature.
 pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseError> {
     let (s, e) = take_no_whitespace(s);
     let (s, a) = take_no_whitespace(s);
@@ -228,6 +256,7 @@ pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseE
 }
 
 #[cfg(feature = "serde_json")]
+/// Requires the `serde_json` feature.
 impl<'a> TryFrom<&'a str> for Pattern<'a, Value> {
     type Error = PatternParseError;
 

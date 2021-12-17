@@ -1,3 +1,6 @@
+//! SQLite's EXPLAIN QUERY PLAN.
+//!
+//! Requires the `explain` feature.
 use std::fmt;
 
 use crate::{sql::Query, DontWoof};

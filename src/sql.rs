@@ -18,10 +18,10 @@ use rusqlite::types::ToSql;
 // use crate::projection::{self, Concept, Constraint, ConstraintOp, DatomSet, Field, Projection};
 // use crate::types::HasAffinity;
 
+use crate::driver::TypeTag;
 use crate::network::{Field, Ordering, Triples, TriplesField};
 use crate::retrieve::Select;
 use crate::soup::Encoded;
-use crate::types::TypeTag;
 
 /// A string buffer for a SQL query with a list of a values that should be passed along
 /// as query parameters to [rusqlite] when querying.

@@ -112,6 +112,13 @@
 //! Check out the [`network`] module for some memes ... TODO
 //!
 //! The [`DontWoof`] type is the main interface around talking to SQLite.
+//!
+//! ## Crate Features
+//!
+//! - explain -- Adds `DontWoof::explain()` to do EXPLAIN QUERY PLAN. *enabled by default*
+//! - cli -- Require do build `bin/owoof`. Enables serde & serde_json.
+//! - serde & serde_json -- Required for `parse_value()` & `parse_pattern()` and for serializing [`Value`]
+//!   and [`ValueRef`]
 
 use thiserror::Error;
 
@@ -132,20 +139,25 @@ use std::cell::RefCell;
 use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, Mutex};
 
+use crate::driver::{TypeTag, ENTITY_ID_TAG};
+
 pub use crate::either::Either;
 pub use crate::network::{GenericNetwork, Network, Ordering, OwnedNetwork};
-pub use crate::retrieve::Select;
+pub use crate::retrieve::{NamedNetwork, Pattern};
 pub use crate::soup::Encoded;
 pub use crate::types::{Attribute, AttributeRef, Entity, Value, ValueRef};
 
+/// This is just supposed to be some helpful traits re-exported but there's only the one thing in
+/// it so there's not much point...
 pub mod traits {
     pub use crate::sql::PushToQuery;
 }
 
-use crate::types::TypeTag;
-
-#[allow(unused)]
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
+
+pub fn create_schema(db: &rusqlite::Connection) -> rusqlite::Result<()> {
+    db.execute_batch(SCHEMA)
+}
 
 /// TODO we only have one variant so what's the point?
 #[derive(Debug, Error)]
@@ -185,7 +197,7 @@ impl<'tx> DontWoof<'tx> {
     pub fn new_entity(&self) -> Result<Encoded<Entity>> {
         let insert = r#"INSERT INTO "soup" (t, v) VALUES (?, randomblob(16))"#;
         let mut insert = self.tx.prepare_cached(insert)?;
-        let n = insert.execute(rusqlite::params![types::ENTITY_ID_TAG])?;
+        let n = insert.execute(rusqlite::params![ENTITY_ID_TAG])?;
         assert_eq!(n, 1);
         let rowid = self.tx.last_insert_rowid();
         Ok(Encoded::from_rowid(rowid))
@@ -228,12 +240,13 @@ impl<'tx> DontWoof<'tx> {
         Ok(rowid)
     }
 
+    /// Insert a single triplet.
     pub fn assert<V: TypeTag>(
         &self,
         e: Encoded<Entity>,
         a: Encoded<Entity>,
         v: Encoded<V>,
-    ) -> Result<()> {
+    ) -> Result<&Self> {
         /* triples is WITHOUT ROWID so don't try to read the last rowid after an insert */
         let mut stmt = self
             .tx
@@ -247,7 +260,7 @@ impl<'tx> DontWoof<'tx> {
          * than %1 of an import.  So it's not worth worrying about this too much. */
         self._update_attribute_indexes()?;
 
-        Ok(())
+        Ok(self)
     }
 
     fn _update_attribute_indexes(&self) -> rusqlite::Result<()> {
@@ -295,6 +308,31 @@ impl<'tx> DontWoof<'tx> {
                 _ => None,
             })
             .try_for_each(|sql| self.tx.execute(&sql, []).map(drop))
+    }
+
+    /// Delete a single triplet.
+    pub fn retract<V: TypeTag>(
+        &self,
+        e: Encoded<Entity>,
+        a: Encoded<Entity>,
+        v: Encoded<V>,
+    ) -> Result<&Self> {
+        let mut stmt = self.tx.prepare_cached(
+            r#"DELETE FROM "triples"
+                WHERE e = ?
+                  AND a = ?
+                  AND v = ?"#,
+        )?;
+        let n = stmt.execute(&[&e.rowid, &a.rowid, &v.rowid])?;
+        assert_eq!(n, 1);
+
+        /* This kind of sucks because it's a super rare event but requires accessing a RefCell
+         * and unlocking a Mutex.  Using an AtomicBool to flag buffer emptiness allow an early exit
+         * doesn't improve performance much (~8ms down to ~6ms) and overall this check is ~less
+         * than %1 of an import.  So it's not worth worrying about this too much. */
+        self._update_attribute_indexes()?;
+
+        Ok(self)
     }
 
     /// Run `PRAGMA optimize;`.  May update indexes and promote better queries.
@@ -452,7 +490,7 @@ impl From<&FluentEntity<'_, '_>> for Encoded<Entity> {
 }
 
 pub mod either {
-    pub use Either::{Left as left, Right as right};
+    pub use Either::{Left, Left as left, Right, Right as right};
 
     #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
     #[derive(Debug, PartialEq)]

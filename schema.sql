@@ -9,7 +9,7 @@ create table "soup"
     ( rowid  integer primary key
     , t      integer not null
     , v      blob    not null
-    -- , rc     integer not null default 0
+    , rc     integer not null default 0
     -- , check (t != 1 OR length(v) == 16)
     );
 -- create unique index "soup-tv-cover" on "soup" (t, v);
@@ -21,7 +21,7 @@ create unique index "soup-tv-1" on "soup" (v) where t = 1;
 create unique index "soup-tv-2" on "soup" (v) where t = 2;
 
 create trigger "soup/no-updates" before update
-            on "soup"
+            on "soup" when new.t != old.t or new.v != old.v
 begin select raise (abort, 'not yet implemented (also confusing)');
 end;
 
@@ -63,7 +63,17 @@ create table "triples"
     ) without rowid;  -- <_<
 
 -- This is very slow to populate :(
-create index "triples-v" on "triples" (v);
+-- TODO this kills the following query...
+--     owoof '?calvin :book/title "The Complete Calvin and Hobbes"' \
+--            '?rating :rating/book ?calvin' \
+--            '?rating :rating/score 1' \
+--            '?rating :rating/user ?u' \
+--            '?more-great-takes :rating/user ?u' \
+--            '?more-great-takes :rating/book ?b' \
+--            '?more-great-takes :rating/score 5' \
+--     --show '?b :book/title :book/avg-rating' \
+--     --asc  '?b :book/avg-rating' --db /tmp/owoof-three.sqlitep
+-- create index "triples-v" on "triples" (v);
 
 -- created programatically by the owoof library
 -- create index "triples-ave-N"  on "triples" (v, e) where a =  N;
@@ -84,6 +94,18 @@ end;
 create trigger "triples/unreplicate-attributes" after delete
             on "triples" when new.t = 3  -- :db/attributes's :db/id
 begin delete from "attributes" where rowid = new.e;
+end;
+
+-- tiggers to reference count soups
+
+create trigger "triples/soup-inc-rc" after insert
+            on "triples"
+begin update "soup" set rc = rc + 1 where rowid = new.v;
+end;
+
+create trigger "triples/soup-dec-rc" after delete
+            on "triples" when new.t = 3  -- :db/attributes's :db/id
+begin update "soup" set rc = rc - 1 where rowid = new.v;
 end;
 
 

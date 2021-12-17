@@ -11,29 +11,7 @@ use thiserror::Error;
 
 use uuid::Uuid;
 
-pub(crate) const PLAIN_TAG: i64 = 0;
-pub(crate) const ENTITY_ID_TAG: i64 = 1;
-pub(crate) const ATTRIBUTE_IDENTIFIER_TAG: i64 = 2;
-// pub const USER_TAG: i64 = 256;
-
-pub trait TypeTag {
-    // type Meme;
-    // fn new(i64) -> Self;
-    fn type_tag(&self) -> i64;
-}
-
-// Wow! Excellent meme!
-impl<T: TypeTag> TypeTag for &'_ T {
-    fn type_tag(&self) -> i64 {
-        (*self).type_tag()
-    }
-}
-
-pub trait ParseError {
-    /// Returns `true` if it's possible that the input is valid for a different type.
-    fn keep_trying(&self) -> bool;
-}
-
+/// A owning version of [`ValueRef`]
 #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -49,6 +27,7 @@ pub enum Value {
 }
 
 /// A borrowing version of [`Value`]
+#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ValueRef<'a> {
     Entity(Entity),
@@ -59,26 +38,6 @@ pub enum ValueRef<'a> {
     Boolean(bool),
     Uuid(Uuid),
     Blob(&'a [u8]),
-}
-
-impl TypeTag for Value {
-    fn type_tag(&self) -> i64 {
-        match self {
-            Value::Entity(e) => e.type_tag(),
-            Value::Attribute(a) => a.type_tag(),
-            _ => PLAIN_TAG,
-        }
-    }
-}
-
-impl TypeTag for ValueRef<'_> {
-    fn type_tag(&self) -> i64 {
-        match self {
-            ValueRef::Entity(e) => e.type_tag(),
-            ValueRef::Attribute(a) => a.type_tag(),
-            _ => PLAIN_TAG,
-        }
-    }
 }
 
 impl<'a> From<&'a Value> for ValueRef<'a> {
@@ -214,6 +173,7 @@ impl<'a> From<&'_ ValueRef<'a>> for ValueRef<'a> {
 }
 
 #[cfg(feature = "serde_json")]
+/// Requires the `serde_json` feature.
 pub fn parse_value(s: &str) -> Option<Value> {
     use serde_json::from_str as json;
 
@@ -228,6 +188,7 @@ pub fn parse_value(s: &str) -> Option<Value> {
 }
 
 #[cfg(feature = "serde_json")]
+/// Requires the `serde_json` feature.
 impl FromStr for Value {
     type Err = ();
 
@@ -237,6 +198,7 @@ impl FromStr for Value {
 }
 
 #[cfg(feature = "serde_json")]
+/// Requires the `serde_json` feature.
 impl TryFrom<&str> for Value {
     type Error = ();
 
@@ -296,12 +258,6 @@ impl From<Uuid> for Entity {
     }
 }
 
-impl TypeTag for Entity {
-    fn type_tag(&self) -> i64 {
-        ENTITY_ID_TAG
-    }
-}
-
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum EntityParseError {
     #[error("expected leading `#`")]
@@ -310,20 +266,25 @@ pub enum EntityParseError {
     Uuid(#[from] uuid::Error),
 }
 
-/// An attribute name or identifier, like :db/id or :pet/name
+/// An attribute name or identifier, like `:db/id` or `:pet/name`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Attribute(String);
 
 impl Attribute {
-    /// Copies the given identifier and prepends a : to create an Attribute
+    /// Copies the given identifier and prepends a `:` to create an Attribute.
     pub fn from_ident(ident: &str) -> Self {
         Self::from_string_unchecked(format!(":{}", ident))
     }
 
     pub fn from_string_unchecked(s: String) -> Self {
         Attribute(s)
+    }
+
+    /// Panics if the attribute is invalid.
+    pub fn from_static(s: &'static str) -> Self {
+        AttributeRef::from_static(s).to_owned()
     }
 }
 
@@ -357,14 +318,14 @@ impl AsRef<AttributeRef> for Attribute {
     }
 }
 
-/// A borrowing version of [`Attribute`], like Path is to PathBuf...
+/// A borrowing version of [`Attribute`], like `Path` is to `PathBuf`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct AttributeRef(str);
 
 impl AttributeRef {
-    /// uses unsafe copied from std lib's path.rs ¯\_(ツ)_/¯
+    /// uses unsafe copied from std lib's path.rs ¯\\_(ツ)_/¯
     /// ```ignore
     /// pub fn new<S: AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
     ///     unsafe { &*(s.as_ref() as *const OsStr as *const Path) }
@@ -374,17 +335,17 @@ impl AttributeRef {
         unsafe { &*(s.as_ref() as *const str as *const AttributeRef) }
     }
 
-    /// TODO needs a better name so this doesn't collide with FromStr
+    /// TODO needs a better name so this doesn't collide with `FromStr`.
     pub fn from_str<S: AsRef<str> + ?Sized>(s: &S) -> Result<&Self, AttributeParseError> {
         parse_attribute(s.as_ref())
     }
 
-    /// Without the leading :
+    /// Without the leading `:`.
     pub fn just_the_identifier(&self) -> &str {
         &self.0[1..]
     }
 
-    /// The identifier with the leading :
+    /// The identifier with the leading `:`.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -466,18 +427,6 @@ impl AttributeRef {
     /// Panics if the attribute is invalid
     pub fn from_static(s: &'static str) -> &'static Self {
         TryFrom::try_from(s).unwrap()
-    }
-}
-
-impl TypeTag for Attribute {
-    fn type_tag(&self) -> i64 {
-        ATTRIBUTE_IDENTIFIER_TAG
-    }
-}
-
-impl TypeTag for &'_ AttributeRef {
-    fn type_tag(&self) -> i64 {
-        ATTRIBUTE_IDENTIFIER_TAG
     }
 }
 

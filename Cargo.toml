@@ -20,7 +20,7 @@ required-features = ["cli", "csv", "atty"]
 [features]
 default = ["explain"]
 explain = []
-cli = ["serde", "serde_json", "anyhow", "either", "uuid/serde"]
+cli = ["serde", "serde_json", "anyhow", "uuid/serde"]
 
 [dependencies]
 thiserror = "1"
@@ -32,7 +32,6 @@ uuid      = { version = "0.8", features = ["v4"] }
 anyhow     = { version = "1", optional = true }
 serde      = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
-either     = { version = "1", optional = true }
 csv        = { version = "1", optional = true }
 atty       = { version = "0.2", optional = true }
 

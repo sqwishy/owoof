@@ -250,42 +250,6 @@ impl<'tx> DontWoof<'tx> {
         Ok(())
     }
 
-    pub fn assert_many<V: TypeTag>(
-        &self,
-        many: &[(Encoded<Entity>, Encoded<Entity>, Encoded<V>)],
-    ) -> Result<()> {
-        use std::iter::{once, repeat};
-
-        /* triples is WITHOUT ROWID so don't try to read the last rowid after an insert */
-        match many {
-            [] => return Ok(()),
-            &[(e, a, v)] => return self.assert(e, a, v),
-            _ => (),
-        }
-
-        let mut params = Vec::with_capacity(3 * many.len());
-        let mut pre = once("VALUES (?, ?, ?)").chain(repeat(", (?, ?, ?)"));
-        let mut sql = r#"INSERT INTO "triples" (e,a,v) "#.to_owned();
-        many.iter().for_each(|(e, a, v)| {
-            sql.push_str(pre.next().unwrap());
-            params.push(&e.rowid as &dyn ToSql);
-            params.push(&a.rowid as &dyn ToSql);
-            params.push(&v.rowid as &dyn ToSql);
-        });
-
-        let mut stmt = self.tx.prepare_cached(&sql)?;
-        let n = stmt.execute(params.as_slice())?;
-        assert_eq!(n, many.len());
-
-        /* This kind of sucks because it's a super rare event but requires accessing a RefCell
-         * and unlocking a Mutex.  Using an AtomicBool to flag buffer emptiness allow an early exit
-         * doesn't improve performance much (~8ms down to ~6ms) and overall this check is ~less
-         * than %1 of an import.  So it's not worth worrying about this too much. */
-        self._update_attribute_indexes()?;
-
-        Ok(())
-    }
-
     fn _update_attribute_indexes(&self) -> rusqlite::Result<()> {
         /* Since Connection is Send, this can fail to lock.  And we don't have a way to recover and
          * try again if that happens.  For now, there should be a big warning about this in the

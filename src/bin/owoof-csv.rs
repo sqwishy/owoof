@@ -106,21 +106,22 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
     while Some(0) != limit && reader.read_record(&mut record)? {
         let e = woof.new_entity()?;
 
-        let assertions = take_indices
+        take_indices
             .iter()
-            .map(|&idx| {
+            .zip(attributes.iter().cloned())
+            .map(|(&idx, a)| {
                 let text = record.get(idx).context("no value")?;
-                let v = parse_value(text);
-                woof.encode(v)
-                    .with_context(|| format!("failed to encode {:?}", text))
+                woof.encode(parse_value(text))
+                    .and_then(|v| woof.assert(e, a, v))
+                    .with_context(|| format!("failed to assert {:?}", text))
             })
             .zip(args.mappings.iter())
-            .map(|(res, map)| res.with_context(|| format!("for {:?}", map.column)))
-            .zip(attributes.iter().cloned())
-            .map(|(res, a)| res.map(|v| (e, a, v)))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        woof.assert_many(assertions.as_slice())?;
+            .map(|(res, map)| res.with_context(|| format!("for column {:?}", map.column)))
+            .collect::<anyhow::Result<()>>()
+            .with_context(|| match record.position() {
+                Some(p) => format!("on line {}", p.line()),
+                None => format!("on line ???"),
+            })?;
 
         records_seen += 1;
         limit.as_mut().map(|l| *l -= 1);

@@ -9,7 +9,7 @@ create table "soup"
     ( rowid  integer primary key
     , t      integer not null
     , v      blob    not null
-    -- , rc     integer not null
+    -- , rc     integer not null default 0
     -- , check (t != 1 OR length(v) == 16)
     );
 -- create unique index "soup-tv-cover" on "soup" (t, v);
@@ -61,10 +61,11 @@ create table "triples"
     , v  integer not null  references "soup" (rowid)
     , primary key (e, a, v)
     ) without rowid;  -- <_<
--- already the primary key create index "triples-eav" on "triples" (e, a, v);
+
+-- This is very slow to populate :(
 create index "triples-v" on "triples" (v);
--- create index "triples-vae-cover" on "triples" (v, a, e);
--- create index "triples-aev-cover" on "triples" (a, e, v);
+
+-- created programatically by the owoof library
 -- create index "triples-ave-N"  on "triples" (v, e) where a =  N;
 
 

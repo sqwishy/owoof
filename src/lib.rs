@@ -183,10 +183,9 @@ impl<'tx> DontWoof<'tx> {
     }
 
     pub fn new_entity(&self) -> Result<Encoded<Entity>> {
-        let n = self.tx.execute(
-            r#"INSERT INTO "soup" (t, v) VALUES (?, randomblob(16))"#,
-            rusqlite::params![types::ENTITY_ID_TAG],
-        )?;
+        let insert = r#"INSERT INTO "soup" (t, v) VALUES (?, randomblob(16))"#;
+        let mut insert = self.tx.prepare_cached(insert)?;
+        let n = insert.execute(rusqlite::params![types::ENTITY_ID_TAG])?;
         assert_eq!(n, 1);
         let rowid = self.tx.last_insert_rowid();
         Ok(Encoded::from_rowid(rowid))
@@ -211,15 +210,16 @@ impl<'tx> DontWoof<'tx> {
                           FROM "soup"
                          WHERE t = ?
                            AND v = ?"#;
-        let rowid = match self
-            .tx
-            .query_row(select, params, |row| row.get::<_, i64>(0))
+        let mut select = self.tx.prepare_cached(select)?;
+        let rowid = match select
+            .query_row(params, |row| row.get::<_, i64>(0))
             .optional()?
         {
             Some(rowid) => rowid,
             None => {
                 let insert = r#"INSERT INTO "soup" (t, v) VALUES (?, ?)"#;
-                let n = self.tx.execute(insert, params)?;
+                let mut insert = self.tx.prepare_cached(insert)?;
+                let n = insert.execute(params)?;
                 assert_eq!(n, 1);
                 self.tx.last_insert_rowid()
             }
@@ -235,10 +235,10 @@ impl<'tx> DontWoof<'tx> {
         v: Encoded<V>,
     ) -> Result<()> {
         /* triples is WITHOUT ROWID so don't try to read the last rowid after an insert */
-        let n = self.tx.execute(
-            r#"INSERT INTO "triples" (e,a,v) VALUES (?, ?, ?)"#,
-            &[&e.rowid, &a.rowid, &v.rowid],
-        )?;
+        let mut stmt = self
+            .tx
+            .prepare_cached(r#"INSERT INTO "triples" (e,a,v) VALUES (?, ?, ?)"#)?;
+        let n = stmt.execute(&[&e.rowid, &a.rowid, &v.rowid])?;
         assert_eq!(n, 1);
 
         /* This kind of sucks because it's a super rare event but requires accessing a RefCell

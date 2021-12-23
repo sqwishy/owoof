@@ -1,6 +1,6 @@
 [package]
 name = "owoof"
-version = "0.2.0-pre.0"
+version = "0.2.0-pre.2"
 authors = ["sqwishy <somebody@froghat.ca>"]
 edition = "2021"
 license = "Apache-2.0"

@@ -166,6 +166,24 @@ impl FromTypeTagAndSqlValue for Value {
     }
 }
 
+impl FromTypeTagAndSqlValue for Entity {
+    fn from_type_tag_and_sql_value(type_tag: i64, value: SqlValueRef<'_>) -> FromSqlResult<Self> {
+        match type_tag {
+            ENTITY_ID_TAG => Entity::column_result(value),
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl FromTypeTagAndSqlValue for Attribute {
+    fn from_type_tag_and_sql_value(type_tag: i64, value: SqlValueRef<'_>) -> FromSqlResult<Self> {
+        match type_tag {
+            ATTRIBUTE_IDENTIFIER_TAG => Attribute::column_result(value),
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ColumnIndex(usize);
 
@@ -185,7 +203,7 @@ impl ColumnIndex {
 }
 
 /// A factory to make a [`FromSqlRow::Out`] from a [`rusqlite::Row`] using
-/// [`FromSqlRow::from_start_of_row`].
+/// [`FromSqlRow::/rom_start_of_row`].
 /// For example `&[T]` (where `T` implements [`FromSqlRow`])
 /// also implements [`FromSqlRow`] where
 /// `FromSqlRow::Out = Vec<<T as FromSqlRow>::Out>`

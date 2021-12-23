@@ -27,12 +27,12 @@ query information.
 Here are some examples:
 
 ```json
-$ echo '[{":attr/ident": ":pet/name"},
+$ echo '[{":db/attribute": ":pet/name"},
          {":pet/name": "Garfield"},
          {":pet/name": "Odie"},
          {":pet/name": "Spot"},
-         {":attr/ident": ":person/name"},
-         {":attr/ident": ":person/starship"},
+         {":db/attribute": ":person/name"},
+         {":db/attribute": ":person/starship"},
          {":person/name": "Jon Arbuckle"},
          {":person/name": "Lieutenant Commander Data",
           ":person/starship": "USS Enterprise (NCC-1701-D)"}]' \
@@ -48,12 +48,12 @@ $ echo '[{":attr/ident": ":pet/name"},
   "#af32cfdb-b0f1-4bbc-830f-1eb83e4380a3"
 ]
 
-$ echo '[{":attr/ident": ":pet/owner"},
-         {":entity/uuid": "#4aa95e29-8d45-470b-98a7-ee39aae1b9c9",
+$ echo '[{":db/attribute": ":pet/owner"},
+         {":db/id": "#4aa95e29-8d45-470b-98a7-ee39aae1b9c9",
           ":pet/owner": "#e7ecd66e-222f-44bc-9932-c778aa26d6ea"},
-         {":entity/uuid": "#2450b9e6-71a4-4311-b93e-3920eebb2c06",
+         {":db/id": "#2450b9e6-71a4-4311-b93e-3920eebb2c06",
           ":pet/owner": "#e7ecd66e-222f-44bc-9932-c778aa26d6ea"},
-         {":entity/uuid": "#c544251c-a279-4809-b9b6-7d3cd68d2f2c",
+         {":db/id": "#c544251c-a279-4809-b9b6-7d3cd68d2f2c",
           ":pet/owner": "#af32cfdb-b0f1-4bbc-830f-1eb83e4380a3"}]' \
       | owoof assert
 [

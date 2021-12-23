@@ -200,6 +200,18 @@ impl<'tx> DontWoof<'tx> {
         Ok(Encoded::from_rowid(rowid))
     }
 
+    pub fn decode<T: driver::FromTypeTagAndSqlValue>(&self, e: Encoded<T>) -> Result<T> {
+        use driver::FromSqlRow;
+        let select = r#"SELECT t, v
+                          FROM "soup"
+                         WHERE rowid = ?"#;
+        let mut select = self.tx.prepare_cached(select)?;
+        let t = select.query_row(rusqlite::params![e.rowid], |row| {
+            driver::just::<T>().from_start_of_row(row)
+        })?;
+        Ok(t)
+    }
+
     pub fn fluent_entity(&self) -> Result<FluentEntity> {
         let e = self.new_entity()?;
         Ok(FluentEntity { woof: self, e })
@@ -561,6 +573,16 @@ mod tests {
             tx.commit()?;
         }
         Ok(db)
+    }
+
+    #[test]
+    fn test_decode_new_enitty() -> anyhow::Result<()> {
+        let mut db = rusqlite_in_memory()?;
+        let tx = db.transaction()?;
+        let woof = DontWoof::from(tx);
+        let e = woof.new_entity()?;
+        let _ = woof.decode(e)?;
+        Ok(())
     }
 
     #[test]

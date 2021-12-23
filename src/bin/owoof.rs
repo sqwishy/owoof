@@ -190,26 +190,28 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
 
     type Object = std::collections::BTreeMap<owoof::Attribute, owoof::Value>;
 
-    // let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
-    let stuff: Object = serde_json::from_reader(&mut input)?;
-    let stuff: either::Either<Object, Vec<Object>> = either::left(stuff);
+    /* TODO this error message is not helpful */
+    let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
+    // let stuff: Object = serde_json::from_reader(&mut input)?;
+    // let stuff: either::Either<Object, Vec<Object>> = either::left(stuff);
 
     let id = owoof::AttributeRef::from_static(":db/id");
 
     let mut ident_cache = std::collections::BTreeMap::default();
 
-    match stuff {
+    let asserted = match stuff {
         either::Left(one) => vec![one].into_iter(),
         either::Right(v) => v.into_iter(),
     }
     .map(|obj| {
-        let e = if let Some(id) = obj.get(id) {
+        let (e, eid) = if let Some(id) = obj.get(id) {
             match id {
-                Value::Entity(entity) => woof.encode(*entity)?,
+                Value::Entity(entity) => (woof.encode(*entity)?, entity.clone()),
                 _ => anyhow::bail!(":db/id must be an Entity, like: #some-uuid-like-this"),
             }
         } else {
-            woof.new_entity()?
+            let e = woof.new_entity()?;
+            (e, woof.decode(e)?)
         };
         obj.into_iter()
             .filter(|(ident, _)| ident.as_ref() != id)
@@ -232,11 +234,20 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
                 Ok(())
             })
             .collect::<Result<(), _>>()
+            .map(|()| eid)
     })
-    .collect::<Result<(), _>>()
-    .context("meme")?;
+    .collect::<Result<Vec<owoof::Entity>, _>>()?;
 
     woof.into_tx().commit().context("commit")?;
+
+    let jaysons = if asserted.len() == 1 {
+        serde_json::to_string_pretty(&asserted[0])
+    } else {
+        serde_json::to_string_pretty(&asserted)
+    }
+    .context("serialize results")?;
+
+    eprintln!("{}", jaysons);
 
     Ok(())
 }
@@ -247,10 +258,10 @@ fn do_retract(_retract: Args) -> anyhow::Result<()> {
 }
 
 fn usage_and_exit(exe: &str) -> ! {
-    eprintln!("usage: {} [--db <path>] [<pattern>...] [--show <show>] [--limit <num>] [--asc <show>] [--desc <show>] [--find|--explain|--explain-plan]", exe);
+    eprintln!("usage: {} [--db <path>] <pattern>... [--show <show>] [--limit <num>] [--asc <show>] [--desc <show>] [--find|--explain|--explain-plan]", exe);
     eprintln!("       {} [--db <path>] init", exe);
-    eprintln!("       {} [--db <path>] [--input <path>] assert", exe);
-    eprintln!("       {} [--db <path>] [--input <path>] retract", exe);
+    eprintln!("       {} [--db <path>] assert  [--input <path>]", exe);
+    eprintln!("       {} [--db <path>] retract [--input <path>]", exe);
     eprintln!("");
     eprintln!("<pattern> is ?var|#some-entity-uuid ?var|:some/attribute ?var|json ");
     eprintln!("<show>    is ?var [:some/attribute...]");
@@ -328,6 +339,10 @@ where
             _ if arg.starts_with("-") => return Err(ArgError::Unknown(arg)),
             _ => patterns.push(arg),
         }
+    }
+
+    if matches!(mode, Mode::Find) && patterns.is_empty() {
+        return Err(ArgError::Usage); /* ¯\_(ツ)_/¯*/
     }
 
     Ok(Args {

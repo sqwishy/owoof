@@ -68,8 +68,7 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
         &args.db,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    let tx = db.transaction()?;
-    let woof = DontWoof::from(tx);
+    let woof = DontWoof::new(&mut db)?;
 
     let db_attribute = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
 

@@ -10,7 +10,6 @@ use std::{
 use thiserror::Error;
 
 #[cfg(feature = "serde")]
-#[cfg(feature = "serde_json")]
 use std::borrow::Cow;
 
 use uuid::Uuid;
@@ -211,7 +210,6 @@ impl TryFrom<&str> for Value {
     }
 }
 
-#[cfg(feature = "serde_json")]
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Value {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -354,18 +352,6 @@ impl fmt::Display for Attribute {
     }
 }
 
-#[cfg(feature = "serde_json")]
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Attribute {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s: Cow<str> = serde::Deserialize::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
-
 impl AsRef<AttributeRef> for Attribute {
     fn as_ref(&self) -> &AttributeRef {
         self
@@ -493,7 +479,7 @@ impl AttributeRef {
 #[cfg(feature = "serde")]
 pub mod _serde {
     use super::*;
-    use serde::{Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     impl Serialize for Entity {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -501,6 +487,26 @@ pub mod _serde {
             S: Serializer,
         {
             serializer.collect_str(&self)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Entity {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let s: Cow<str> = Deserialize::deserialize(deserializer)?;
+            s.parse().map_err(serde::de::Error::custom)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Attribute {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let s: Cow<str> = Deserialize::deserialize(deserializer)?;
+            s.parse().map_err(serde::de::Error::custom)
         }
     }
 }

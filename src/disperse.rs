@@ -14,9 +14,8 @@
 //! # use rusqlite::Connection;
 //! #
 //! # let mut db = rusqlite::Connection::open_in_memory().unwrap();
-//! # let mut tx = db.transaction().unwrap();
-//! # owoof::create_schema(&tx).unwrap();
-//! # let woof = owoof::DontWoof::from(tx);
+//! # owoof::create_schema_in_transaction(&mut db).unwrap();
+//! # let woof = owoof::DontWoof::new(&mut db).unwrap();
 //! #
 //! // FromSqlRow is implemented on tuples & arrays.
 //! let mut fromsql = (

@@ -16,6 +16,15 @@ const OPEN_RW: rusqlite::OpenFlags =
 
 const OPEN_CREATE: rusqlite::OpenFlags = OPEN_RW.union(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
 
+// type Object = std::collections::BTreeMap<owoof::Attribute, owoof::Value>;
+#[derive(serde::Deserialize)]
+struct Object {
+    #[serde(rename = ":db/id")]
+    id: Option<owoof::Entity>,
+    #[serde(flatten)]
+    other: std::collections::BTreeMap<owoof::Attribute, owoof::Value>,
+}
+
 fn main() {
     let args_vec = std::env::args().collect::<Vec<String>>();
     let mut args = args_vec.iter().map(String::as_str);
@@ -59,8 +68,7 @@ fn print_traceback(err: &dyn Error) {
 
 fn do_find(find: Args) -> anyhow::Result<()> {
     let mut db = rusqlite::Connection::open_with_flags(&find.path, OPEN_RW)?;
-    let tx = db.transaction()?;
-    let woof = DontWoof::from(tx);
+    let woof = DontWoof::new(&mut db)?;
 
     let mut network = retrieve::NamedNetwork::<ValueRef>::default();
 
@@ -185,17 +193,12 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
     let mut input = open_check_tty(assert.input.as_ref())?;
 
     let mut db = rusqlite::Connection::open_with_flags(&assert.path, OPEN_RW)?;
-    let tx = db.transaction()?;
-    let woof = DontWoof::from(tx);
-
-    type Object = std::collections::BTreeMap<owoof::Attribute, owoof::Value>;
+    let woof = DontWoof::new(&mut db)?;
 
     /* TODO this error message is not helpful */
     let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
     // let stuff: Object = serde_json::from_reader(&mut input)?;
     // let stuff: either::Either<Object, Vec<Object>> = either::left(stuff);
-
-    let id = owoof::AttributeRef::from_static(":db/id");
 
     let mut ident_cache = std::collections::BTreeMap::default();
 
@@ -204,17 +207,17 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
         either::Right(v) => v.into_iter(),
     }
     .map(|obj| {
-        let (e, eid) = if let Some(id) = obj.get(id) {
-            match id {
-                Value::Entity(entity) => (woof.encode(*entity)?, entity.clone()),
-                _ => anyhow::bail!(":db/id must be an Entity, like: #some-uuid-like-this"),
+        let Object { id, other } = obj;
+        let (e, id) = match id {
+            Some(id) => (woof.encode(id)?, id),
+            None => {
+                let e = woof.new_entity()?;
+                (e, woof.decode(e)?)
             }
-        } else {
-            let e = woof.new_entity()?;
-            (e, woof.decode(e)?)
         };
-        obj.into_iter()
-            .filter(|(ident, _)| ident.as_ref() != id)
+
+        other
+            .into_iter()
             .map(|(ident, v)| {
                 let a = match ident_cache.get(&ident).cloned() {
                     Some(a) => a,
@@ -233,8 +236,8 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
                 woof.assert(e, a, v)?;
                 Ok(())
             })
-            .collect::<Result<(), _>>()
-            .map(|()| eid)
+            .collect::<anyhow::Result<()>>()
+            .map(|()| id)
     })
     .collect::<Result<Vec<owoof::Entity>, _>>()?;
 
@@ -252,9 +255,53 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn do_retract(_retract: Args) -> anyhow::Result<()> {
-    eprintln!("TODO");
-    Ok(())
+fn do_retract(retract: Args) -> anyhow::Result<()> {
+    let mut input = open_check_tty(retract.input.as_ref())?;
+
+    let mut db = rusqlite::Connection::open_with_flags(&retract.path, OPEN_RW)?;
+    let woof = DontWoof::new(&mut db)?;
+
+    let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
+
+    let mut ident_cache = std::collections::BTreeMap::default();
+
+    match stuff {
+        either::Left(one) => vec![one].into_iter(),
+        either::Right(v) => v.into_iter(),
+    }
+    .map(|obj| {
+        let Object { id, other } = obj;
+        let id = id.context(":db/id is required to retract")?;
+        let e = woof.encode(id)?;
+
+        other
+            .into_iter()
+            .map(|(ident, v)| {
+                let a = match ident_cache.get(&ident).cloned() {
+                    Some(a) => a,
+                    None => {
+                        let encoded = woof.encode(&ident)?;
+                        let a = woof
+                            .attribute(encoded)
+                            .with_context(|| format!("attribute {}", &ident))?;
+                        if ident_cache.len() < 256 {
+                            ident_cache.insert(ident.clone(), a);
+                        }
+                        a
+                    }
+                };
+                let v = woof.encode(v)?;
+                woof.retract(e, a, v)?;
+                Ok(())
+            })
+            .collect::<anyhow::Result<Sum>>()
+    })
+    .collect::<anyhow::Result<Sum>>()
+    .and_then(|n: Sum| {
+        // woof.into_tx().commit().context("commit")?;
+        eprintln!("{}", n.usize());
+        Ok(())
+    })
 }
 
 fn usage_and_exit(exe: &str) -> ! {
@@ -487,5 +534,32 @@ pub fn open_check_tty(input: Option<&PathBuf>) -> io::Result<Box<dyn io::Read>> 
             }
             Ok(Box::new(io::stdin()))
         }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct Sum(usize);
+
+impl Sum {
+    fn usize(self) -> usize {
+        self.0
+    }
+}
+
+impl std::iter::FromIterator<()> for Sum {
+    fn from_iter<T: IntoIterator<Item = ()>>(iter: T) -> Self {
+        Sum(iter.into_iter().fold(0usize, |sum, _| sum + 1))
+    }
+}
+
+impl std::iter::FromIterator<Sum> for Sum {
+    fn from_iter<T: IntoIterator<Item = Sum>>(iter: T) -> Self {
+        Sum(iter.into_iter().fold(0usize, |sum, x| sum + x.usize()))
+    }
+}
+
+impl std::iter::FromIterator<usize> for Sum {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        Sum(iter.into_iter().fold(0usize, |sum, x| sum + x))
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "owoof"
-version = "0.2.0-pre.2"
+version = "0.2.0-pre.3"
 authors = ["sqwishy <somebody@froghat.ca>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -24,6 +24,7 @@ features = ["serde", "serde_json"]
 default = ["explain"]
 explain = []
 cli = ["serde", "serde_json", "anyhow", "uuid/serde", "atty"]
+# serde = ["serde", "uuid/serde"]
 
 [dependencies]
 thiserror = "1"

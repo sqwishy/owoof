@@ -93,35 +93,51 @@ impl<'a> FromSql for Attribute {
 
 /// See the module level documentation in [`crate::driver`] about this.
 pub trait TypeTag {
+    /// Used to help map borrowing and owning instances to a single type.  To avoid discriminating
+    /// between `&Value`, `Value`, and `ValueRef` in cases where we want to treat them the same.
+    ///
+    /// I don't really like this solution but I don't know of a more normal trait to use.
+    type Factory;
+
     fn type_tag(&self) -> i64;
 }
 
 // Wow! Excellent meme!
 impl<T: TypeTag> TypeTag for &'_ T {
+    type Factory = <T as TypeTag>::Factory;
+
     fn type_tag(&self) -> i64 {
         (*self).type_tag()
     }
 }
 
 impl TypeTag for Entity {
+    type Factory = Self;
+
     fn type_tag(&self) -> i64 {
         ENTITY_ID_TAG
     }
 }
 
 impl TypeTag for Attribute {
+    type Factory = Self;
+
     fn type_tag(&self) -> i64 {
         ATTRIBUTE_IDENTIFIER_TAG
     }
 }
 
 impl TypeTag for &'_ AttributeRef {
+    type Factory = Attribute;
+
     fn type_tag(&self) -> i64 {
         ATTRIBUTE_IDENTIFIER_TAG
     }
 }
 
 impl TypeTag for Value {
+    type Factory = Self;
+
     fn type_tag(&self) -> i64 {
         match self {
             Value::Entity(e) => e.type_tag(),
@@ -132,6 +148,8 @@ impl TypeTag for Value {
 }
 
 impl TypeTag for ValueRef<'_> {
+    type Factory = Value;
+
     fn type_tag(&self) -> i64 {
         match self {
             ValueRef::Entity(e) => e.type_tag(),

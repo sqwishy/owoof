@@ -39,8 +39,8 @@ begin insert into "entities" (rowid) values (new.rowid);
 end;
 
 create trigger "soup/unreplicate-entities" after delete
-            on "soup" when new.t = 1
-begin delete from "entities" where rowid = new.rowid;
+            on "soup" when old.t = 1
+begin delete from "entities" where rowid = old.rowid;
 end;
 
 -- triggers to replicate the `:db/id` triples
@@ -51,8 +51,8 @@ begin insert into "triples" (e, a, v) values (new.rowid, 1, new.rowid);
 end;
 
 create trigger "soup/retract-dbid-triples" after delete
-            on "soup" when new.t = 1
-begin delete from "triples" where e = new.rowid and a = 1 and v = new.rowid;
+            on "soup" when old.t = 1
+begin delete from "triples" where e = old.rowid and a = 1 and v = old.rowid;
 end;
 
 
@@ -104,8 +104,8 @@ begin insert into "attributes" (rowid, ident) values (new.e, new.v);
 end;
 
 create trigger "triples/unreplicate-attributes" after delete
-            on "triples" when new.t = 3  -- :db/attributes's :db/id
-begin delete from "attributes" where rowid = new.e;
+            on "triples" when old.a = 3  -- :db/attributes's :db/id
+begin delete from "attributes" where rowid = old.e;
 end;
 
 -- tiggers to reference count soups
@@ -116,8 +116,8 @@ begin update "soup" set rc = rc + 1 where rowid = new.v;
 end;
 
 create trigger "triples/soup-dec-rc" after delete
-            on "triples" when new.t = 3  -- :db/attributes's :db/id
-begin update "soup" set rc = rc - 1 where rowid = new.v;
+            on "triples"
+begin update "soup" set rc = rc - 1 where rowid = old.v;
 end;
 
 

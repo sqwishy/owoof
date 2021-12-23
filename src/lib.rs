@@ -155,8 +155,16 @@ pub mod traits {
 
 pub(crate) const SCHEMA: &str = include_str!("../schema.sql");
 
+/// Simply executes all the statements required to build the schema against the given connection.
+/// Run this under a transaction that you manage or use [`create_schema_in_transaction`].
 pub fn create_schema(db: &rusqlite::Connection) -> rusqlite::Result<()> {
     db.execute_batch(SCHEMA)
+}
+
+pub fn create_schema_in_transaction(db: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    let tx = db.transaction()?;
+    create_schema(&tx)?;
+    tx.commit()
 }
 
 /// TODO we only have one variant so what's the point?
@@ -168,8 +176,11 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-type Change = (Action, i64);
+type Change = i64;
 
+/// This has a bunch of logic for changing data, use [`DontWoof::new`] to make an instance.
+///
+/// `DontWoof::from(rusqlite::Transaction)` is bad, don't use it.
 #[derive(Debug)]
 pub struct DontWoof<'tx> {
     tx: HookedTransaction<'tx>,
@@ -179,17 +190,30 @@ pub struct DontWoof<'tx> {
 }
 
 impl<'tx> DontWoof<'tx> {
+    /// `DontWoof::from(rusqlite::Transaction)` is bad, don't use it.
+    pub fn new(db: &'tx mut rusqlite::Connection) -> Result<Self> {
+        db.execute("pragma foreign_keys=on", [])?;
+        let tx = db.transaction()?;
+        Ok(Self::from(tx))
+    }
+
     /// Look up an attribute by its identifier.
     ///
     /// In other words, find ?e given ?a where ?e :db/attribute ?a.
-    pub fn attribute<'a, A: AsRef<AttributeRef>>(&self, a: Encoded<A>) -> Result<Encoded<Entity>> {
+    pub fn attribute<A: AsRef<AttributeRef>>(&self, a: Encoded<A>) -> Result<Encoded<Entity>> {
         let sql = r#"SELECT rowid FROM "attributes" WHERE ident = ?"#;
         self.tx
             .query_row(sql, &[&a.rowid], |row| row.get::<_, i64>(0))
-            // .optional()
             .map(Encoded::from_rowid)
             .map_err(Error::from)
     }
+
+    // /// Panics if the given identifier is not valid.
+    // pub fn attribute_for(&self, identifier: &'static str) -> Result<Encoded<Entity>> {
+    //     let a = self.encode(AttributeRef::from_static(identifier))?;
+    //     let e = self.attribute(a)?;
+    //     Ok(e)
+    // }
 
     pub fn new_entity(&self) -> Result<Encoded<Entity>> {
         let insert = r#"INSERT INTO "soup" (t, v) VALUES (?, randomblob(16))"#;
@@ -217,7 +241,7 @@ impl<'tx> DontWoof<'tx> {
         Ok(FluentEntity { woof: self, e })
     }
 
-    pub fn encode<V: TypeTag + ToSql>(&self, val: V) -> Result<Encoded<V>> {
+    pub fn encode<V: TypeTag + ToSql>(&self, val: V) -> Result<Encoded<<V as TypeTag>::Factory>> {
         let rowid: i64 = self._encode(val.type_tag(), &val as &dyn ToSql)?;
         Ok(Encoded::from_rowid(rowid))
     }
@@ -289,6 +313,9 @@ impl<'tx> DontWoof<'tx> {
                 return Ok(());
             }
 
+            swap.sort_unstable();
+            swap.dedup();
+
             let result = self._execute_attribute_index_changes(swap.as_slice());
 
             swap.clear();
@@ -304,19 +331,32 @@ impl<'tx> DontWoof<'tx> {
     }
 
     fn _execute_attribute_index_changes(&self, swap: &[Change]) -> rusqlite::Result<()> {
-        swap.iter()
-            .filter_map(|(action, rowid)| match action {
-                Action::SQLITE_INSERT => Some(format!(
-                    r#"CREATE INDEX "triples-ave-{rowid}" ON "triples" (v, e) WHERE a = {rowid}"#,
+        /* The changes list just a rowid.  We don't assume from the action whether an attribute has
+         * actually been created or removed because we may get change notifications for failed
+         * commands that are rolled back -- such as removing an attribute that is in use.
+         *
+         * So we're paranoid and any change notification just means to recheck the state. */
+        swap.iter().try_for_each(|rowid| {
+            let mut stmt = self
+                .tx
+                .prepare_cached(r#"SELECT count(*) FROM "attributes" WHERE rowid = ?"#)?;
+            let c: i64 = stmt.query_row(&[rowid], |row| row.get(0))?;
+            let sql = if 0 < c {
+                format!(
+                    r#"CREATE INDEX
+                          IF NOT EXISTS "triples-ave-{rowid}"
+                                     ON "triples" (v, e)
+                                  WHERE a = {rowid}"#,
                     rowid = rowid
-                )),
-                Action::SQLITE_DELETE => Some(format!(
-                    r#"DROP INDEX "triples-ave-{rowid}""#,
+                )
+            } else {
+                format!(
+                    r#"DROP INDEX IF EXISTS "triples-ave-{rowid}""#,
                     rowid = rowid
-                )),
-                _ => None,
-            })
-            .try_for_each(|sql| self.tx.execute(&sql, []).map(drop))
+                )
+            };
+            self.tx.execute(&sql, []).map(drop)
+        })
     }
 
     /// Delete a single triplet.
@@ -442,6 +482,11 @@ impl<'tx> Drop for HookedTransaction<'tx> {
 
 impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
     fn from(tx: rusqlite::Transaction<'tx>) -> Self {
+        let foreign_keys: i64 = tx
+            .query_row("pragma foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert!(1 == foreign_keys);
+
         /* irc this must be Send because this hook is placed on the Connnection which can be shared
          * by multiple threads.  So Arc and other Send-able primitives are required instead of
          * their !Send counterparts.  */
@@ -451,16 +496,25 @@ impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
         let hook = {
             let changes = Arc::clone(&changes);
             let changes_failed = Arc::clone(&changes_failed);
-            move |action: Action, _database: &str, table: &str, rowid: i64| {
+            move |_action: Action, _database: &str, table: &str, rowid: i64| {
                 if table == "attributes" {
                     if let Ok(ref mut mutex) = changes.try_lock() {
-                        mutex.push((action, rowid));
+                        mutex.push(rowid);
                     } else {
                         changes_failed.store(true, atomic::Ordering::SeqCst);
                     }
                 }
             }
         };
+
+        tx.commit_hook(Some(|| {
+            eprintln!("rollback");
+            true
+        }));
+
+        tx.rollback_hook(Some(|| {
+            eprintln!("rollback");
+        }));
 
         DontWoof {
             tx: HookedTransaction::new(tx, hook),
@@ -576,20 +630,29 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_new_enitty() -> anyhow::Result<()> {
+    fn test_decode_new_entity() -> anyhow::Result<()> {
         let mut db = rusqlite_in_memory()?;
-        let tx = db.transaction()?;
-        let woof = DontWoof::from(tx);
+        let woof = DontWoof::new(&mut db)?;
+
         let e = woof.new_entity()?;
         let _ = woof.decode(e)?;
         Ok(())
     }
 
     #[test]
-    fn test() -> anyhow::Result<()> {
+    fn test_decode() -> anyhow::Result<()> {
         let mut db = rusqlite_in_memory()?;
-        let tx = db.transaction()?;
-        let woof = DontWoof::from(tx);
+        let woof = DontWoof::new(&mut db)?;
+
+        let v = woof.encode(ValueRef::from("hello world"))?;
+        assert_eq!(Value::Text("hello world".to_owned()), woof.decode(v)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_retract() -> anyhow::Result<()> {
+        let mut db = rusqlite_in_memory()?;
+        let woof = DontWoof::new(&mut db)?;
 
         let db_attr = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
 
@@ -603,11 +666,27 @@ mod tests {
             .assert(db_attr, woof.encode(":animal/name".parse::<Attribute>()?)?)?
             .into();
 
-        let _garfield: Encoded<Entity> = woof
+        let garfield: Encoded<Entity> = woof
             .fluent_entity()?
             .assert(pet_name, woof.encode(ValueRef::from("Garfield"))?)?
             .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
             .into();
+
+        assert!(woof
+            .retract(
+                animal_name,
+                db_attr,
+                woof.encode(":animal/name".parse::<Attribute>()?)?,
+            )
+            .is_err());
+
+        woof.retract(garfield, animal_name, woof.encode(ValueRef::from("Cat"))?)?;
+
+        woof.retract(
+            animal_name,
+            db_attr,
+            woof.encode(":animal/name".parse::<Attribute>()?)?,
+        )?;
 
         Ok(())
     }

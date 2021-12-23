@@ -17,6 +17,9 @@ required-features = ["cli"]
 name = "owoof-csv"
 required-features = ["cli", "csv"]
 
+[package.metadata.docs.rs]
+features = ["serde", "serde_json"]
+
 [features]
 default = ["explain"]
 explain = []

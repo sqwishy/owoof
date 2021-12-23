@@ -2,8 +2,8 @@
 
 use std::borrow::Cow;
 use std::error::Error;
+use std::iter;
 use std::path::PathBuf;
-use std::{fs, io, iter};
 
 use owoof::{AttributeRef, DontWoof, Optional, ValueRef};
 
@@ -27,15 +27,7 @@ struct Mapping<'a> {
 }
 
 fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
-    let input: Box<dyn io::Read> = match args.input {
-        Some(path) => Box::new(fs::File::open(path).map(io::BufReader::new)?),
-        None => {
-            if atty::is(atty::Stream::Stdin) {
-                eprintln!("reading csv from stdin (and stdin looks like a tty) good luck!");
-            }
-            Box::new(io::stdin())
-        }
-    };
+    let input = open_check_tty(args.input.as_ref())?;
 
     let mut reader = csv::Reader::from_reader(input);
     let headers = reader.headers()?;
@@ -309,4 +301,21 @@ fn default_db_path() -> PathBuf {
     std::env::var_os("OWOOF_DB")
         .map(PathBuf::from)
         .unwrap_or("owoof.sqlite".into())
+}
+
+use std::{fs, io};
+
+pub fn open_check_tty(input: Option<&PathBuf>) -> io::Result<Box<dyn io::Read>> {
+    match input {
+        Some(path) => {
+            let file = fs::File::open(path)?;
+            Ok(Box::new(io::BufReader::new(file)))
+        }
+        None => {
+            if atty::is(atty::Stream::Stdin) {
+                eprintln!("reading csv from stdin (and stdin looks like a tty) good luck!");
+            }
+            Ok(Box::new(io::stdin()))
+        }
+    }
 }

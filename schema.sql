@@ -43,6 +43,18 @@ create trigger "soup/unreplicate-entities" after delete
 begin delete from "entities" where rowid = new.rowid;
 end;
 
+-- triggers to replicate the `:db/id` triples
+
+create trigger "soup/assert-dbid-triples" after insert
+            on "soup" when new.t = 1
+begin insert into "triples" (e, a, v) values (new.rowid, 1, new.rowid);
+end;
+
+create trigger "soup/retract-dbid-triples" after delete
+            on "soup" when new.t = 1
+begin delete from "triples" where e = new.rowid and a = 1 and v = new.rowid;
+end;
+
 
 -- a materialized view, maintained by a trigger, do not touch
 
@@ -111,7 +123,7 @@ end;
 
 -- ...
 
--- TODO I think randomblob(16) may not produce a valid v4 uuid
+-- TODO is randomblob(16) a valid v4 uuid?
 insert into "soup" (rowid, t, v)
      values (1, 1, randomblob(16))  -- :db/id's :db/id
           , (2, 2, "db/id")
@@ -119,9 +131,7 @@ insert into "soup" (rowid, t, v)
           , (4, 2, "db/attribute");
 
 insert into "triples" (e, a, v)
-     values (1, 1, 1)  -- :db/id        :db/id        ...
-          , (1, 3, 2)  -- :db/id        :db/attribute :db/id
-          , (3, 1, 3)  -- :db/attribute :db/id        ...
+     values (1, 3, 2)  -- :db/id        :db/attribute :db/id
           , (3, 3, 4)  -- :db/attribute :db/attribute :db/attribute
     ;
 

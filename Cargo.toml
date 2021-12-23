@@ -15,12 +15,12 @@ required-features = ["cli"]
 
 [[bin]]
 name = "owoof-csv"
-required-features = ["cli", "csv", "atty"]
+required-features = ["cli", "csv"]
 
 [features]
 default = ["explain"]
 explain = []
-cli = ["serde", "serde_json", "anyhow", "uuid/serde"]
+cli = ["serde", "serde_json", "anyhow", "uuid/serde", "atty"]
 
 [dependencies]
 thiserror = "1"

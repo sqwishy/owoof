@@ -9,6 +9,10 @@ use std::{
 };
 use thiserror::Error;
 
+#[cfg(feature = "serde")]
+#[cfg(feature = "serde_json")]
+use std::borrow::Cow;
+
 use uuid::Uuid;
 
 /// A owning version of [`ValueRef`]
@@ -207,6 +211,38 @@ impl TryFrom<&str> for Value {
     }
 }
 
+#[cfg(feature = "serde_json")]
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Container<'a> {
+            Float(f64),
+            Integer(i64),
+            Boolean(bool),
+            Text(Cow<'a, str>),
+            Bytes(Cow<'a, [u8]>),
+        }
+
+        let s: Container = serde::Deserialize::deserialize(deserializer)?;
+        Ok(match s {
+            Container::Float(f) => Value::from(f),
+            Container::Integer(i) => Value::from(i),
+            Container::Boolean(b) => Value::from(b),
+            Container::Text(t) => Option::<Value>::None
+                .or_else(|| t.parse::<Entity>().map(Value::from).ok())
+                .or_else(|| t.parse::<Attribute>().map(Value::from).ok())
+                .or_else(|| t.parse::<uuid::Uuid>().map(Value::from).ok())
+                .unwrap_or_else(|| Value::Text(t.into())),
+            Container::Bytes(b) => Value::Blob(b.into()),
+        })
+    }
+}
+
 /// A uuid referring to an entity.
 #[derive(Debug, Clone, PartialEq, Copy)]
 #[repr(transparent)]
@@ -312,6 +348,24 @@ impl<'a> TryFrom<&'a str> for Attribute {
     }
 }
 
+impl fmt::Display for Attribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+#[cfg(feature = "serde_json")]
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Attribute {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: Cow<str> = serde::Deserialize::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl AsRef<AttributeRef> for Attribute {
     fn as_ref(&self) -> &AttributeRef {
         self
@@ -371,6 +425,12 @@ impl ToOwned for AttributeRef {
 
     fn to_owned(&self) -> Self::Owned {
         Attribute(self.0.to_owned())
+    }
+}
+
+impl AsRef<AttributeRef> for &AttributeRef {
+    fn as_ref(&self) -> &AttributeRef {
+        self
     }
 }
 

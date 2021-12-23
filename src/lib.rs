@@ -116,7 +116,7 @@
 //! ## Crate Features
 //!
 //! - explain -- Adds `DontWoof::explain()` to do EXPLAIN QUERY PLAN. *enabled by default*
-//! - cli -- Require do build `bin/owoof`. Enables serde & serde_json.
+//! - cli -- Required for `bin/owoof`. Enables serde & serde_json.
 //! - serde & serde_json -- Required for `parse_value()` & `parse_pattern()` and for serializing [`Value`]
 //!   and [`ValueRef`]
 
@@ -182,10 +182,7 @@ impl<'tx> DontWoof<'tx> {
     /// Look up an attribute by its identifier.
     ///
     /// In other words, find ?e given ?a where ?e :db/attribute ?a.
-    pub fn attribute<'a, A: Into<&'a AttributeRef>>(
-        &self,
-        a: Encoded<A>,
-    ) -> Result<Encoded<Entity>> {
+    pub fn attribute<'a, A: AsRef<AttributeRef>>(&self, a: Encoded<A>) -> Result<Encoded<Entity>> {
         let sql = r#"SELECT rowid FROM "attributes" WHERE ident = ?"#;
         self.tx
             .query_row(sql, &[&a.rowid], |row| row.get::<_, i64>(0))
@@ -492,7 +489,11 @@ impl From<&FluentEntity<'_, '_>> for Encoded<Entity> {
 pub mod either {
     pub use Either::{Left, Left as left, Right, Right as right};
 
-    #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(untagged)
+    )]
     #[derive(Debug, PartialEq)]
     pub enum Either<L, R> {
         Left(L),

@@ -1,14 +1,22 @@
-//! hi
+//! query, assert, or retract triplets
 
+use std::error::Error;
 use std::path::PathBuf;
 
+use owoof::disperse::zip_with_keys;
+use owoof::driver::just;
 use owoof::network::TriplesField;
 use owoof::retrieve::{self, Pattern, Variable};
 use owoof::{either, sql::PushToQuery, AttributeRef, DontWoof, Ordering, Value, ValueRef};
 
 use anyhow::Context;
 
-fn main() -> anyhow::Result<()> {
+const OPEN_RW: rusqlite::OpenFlags =
+    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE.union(rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX);
+
+const OPEN_CREATE: rusqlite::OpenFlags = OPEN_RW.union(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
+
+fn main() {
     let args_vec = std::env::args().collect::<Vec<String>>();
     let mut args = args_vec.iter().map(String::as_str);
 
@@ -17,147 +25,232 @@ fn main() -> anyhow::Result<()> {
         .map(|s| s.rsplit('/').next().unwrap_or(s))
         .unwrap_or("owoof");
 
-    match parse_find(args) {
-        Err(ArgError::Usage) => usage_and_exit(exe),
-        Err(e) => {
-            eprintln!("oof! {}", e);
-
-            use std::error::Error;
-            let mut source = e.source();
-            while let Some(e) = source {
-                eprintln!("   » {}", e);
-                source = e.source();
-            }
-
+    let parsed = parse_args(args).unwrap_or_else(|err| match err {
+        ArgError::Usage => usage_and_exit(exe),
+        _ => {
+            eprintln!("oof! {}", &err);
+            print_traceback(&err);
             eprintln!("");
             usage_and_exit(exe)
         }
-        Ok(find) => {
-            let mut db = rusqlite::Connection::open_with_flags(
-                &find.path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            let tx = db.transaction()?;
-            let woof = DontWoof::from(tx);
+    });
 
-            let mut network = retrieve::NamedNetwork::<ValueRef>::default();
+    match &parsed.mode {
+        Mode::Find => do_find(parsed),
+        Mode::Init => do_init(parsed),
+        Mode::Assert => do_assert(parsed),
+        Mode::Retract => do_retract(parsed),
+    }
+    .unwrap_or_else(|err: anyhow::Error| {
+        eprintln!("oof! {}", &err);
+        print_traceback(err.as_ref());
+        eprintln!("");
+        std::process::exit(1);
+    });
+}
 
-            for pattern in find.patterns.iter() {
-                network.add_pattern(pattern);
-            }
+fn print_traceback(err: &dyn Error) {
+    let mut source = err.source();
+    while let Some(err) = source {
+        eprintln!("   » {}", err);
+        source = err.source();
+    }
+}
 
-            use owoof::disperse::zip_with_keys;
-            use owoof::driver::just;
+fn do_find(find: Args) -> anyhow::Result<()> {
+    let mut db = rusqlite::Connection::open_with_flags(&find.path, OPEN_RW)?;
+    let tx = db.transaction()?;
+    let woof = DontWoof::from(tx);
 
-            let mut retreival = vec![];
-            let mut dispersal =
-                find.show
-                    .iter()
-                    .map(|show| -> anyhow::Result<_> {
-                        let field = network.names.lookup(&show.variable).with_context(|| {
-                            anyhow::anyhow!("cannot show `{}`", &show.variable)
-                        })?;
+    let mut network = retrieve::NamedNetwork::<ValueRef>::default();
 
-                        /* If there are no attributes, show ?var.
-                         * If attributes are given, then show the value of
-                         * those attributes where ?var is the entity. */
-                        if show.attributes.is_empty() {
-                            retreival.push(field);
-
-                            Ok(either::left(just::<Value>()))
-                        } else {
-                            retreival.extend(show.attributes.iter().map(|&attribute| {
-                                network.value_for_entity_attribute(field, attribute)
-                            }));
-
-                            Ok(either::right(zip_with_keys(&show.attributes)))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-            let mut order_by = vec![];
-
-            find.order.iter().try_for_each(|(show, ordering)| {
-                let field = network
-                    .names
-                    .lookup(&show.variable)
-                    .with_context(|| anyhow::anyhow!("cannot order by `{}`", &show.variable))?;
-
-                if show.attributes.is_empty() {
-                    order_by.push((field, *ordering));
-                } else {
-                    order_by.extend(show.attributes.iter().map(|&attribute| {
-                        let field = network.value_for_entity_attribute(field, attribute);
-                        (field, *ordering)
-                    }));
-                }
-
-                Result::<_, anyhow::Error>::Ok(())
-            })?;
-
-            /* Default --show is showing values for variables with the fewest constraints. */
-
-            if dispersal.is_empty() {
-                debug_assert!(retreival.is_empty());
-                retreival = variables_with_fewest_constraints(&network)
-                    .map(|(_, field)| field)
-                    .collect();
-                dispersal = retreival
-                    .iter()
-                    .map(|_| either::left(just::<Value>()))
-                    .collect();
-            }
-
-            /* TODO select makes network immutable (this is probably stupid),
-             * so we can't select until after we prefetch, we can't prefetch
-             * until after we've gone through the --show and made a selection */
-            network.prefetch_attributes(&woof)?;
-
-            let mut select = network.select();
-
-            for field in retreival.into_iter() {
-                select.field(field);
-            }
-
-            for o in order_by.into_iter() {
-                select.order_by(o);
-            }
-
-            select.limit(find.limit);
-
-            if find.explain {
-                let q = select.to_query();
-                eprintln!("{}", q.as_str());
-
-                let explain = woof.explain_plan(&q).context("explain")?;
-                eprintln!("{}", explain);
-
-                return Ok(());
-            }
-
-            let results = select.to_query().disperse(
-                /* if we map a row to a single value, don't put that value in a list */
-                if dispersal.len() == 1 {
-                    either::left(dispersal.into_iter().next().unwrap())
-                } else {
-                    either::right(dispersal.as_mut_slice())
-                },
-                &woof,
-            )?;
-            let json = serde_json::to_string_pretty(&results)?;
-
-            println!("{}", json);
-        }
+    for pattern in find.patterns.iter() {
+        network.add_pattern(pattern);
     }
 
+    let mut retreival = vec![];
+    let mut dispersal = find
+        .show
+        .iter()
+        .map(|show| -> anyhow::Result<_> {
+            let field = network
+                .names
+                .lookup(&show.variable)
+                .with_context(|| anyhow::anyhow!("cannot show `{}`", &show.variable))?;
+
+            /* If there are no attributes, show ?var.
+             * If attributes are given, then show the value of
+             * those attributes where ?var is the entity. */
+            if show.attributes.is_empty() {
+                retreival.push(field);
+
+                Ok(either::left(just::<Value>()))
+            } else {
+                retreival.extend(
+                    show.attributes
+                        .iter()
+                        .map(|&attribute| network.value_for_entity_attribute(field, attribute)),
+                );
+
+                Ok(either::right(zip_with_keys(&show.attributes)))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut order_by = vec![];
+
+    find.order.iter().try_for_each(|(show, ordering)| {
+        let field = network
+            .names
+            .lookup(&show.variable)
+            .with_context(|| anyhow::anyhow!("cannot order by `{}`", &show.variable))?;
+
+        if show.attributes.is_empty() {
+            order_by.push((field, *ordering));
+        } else {
+            order_by.extend(show.attributes.iter().map(|&attribute| {
+                let field = network.value_for_entity_attribute(field, attribute);
+                (field, *ordering)
+            }));
+        }
+
+        Result::<_, anyhow::Error>::Ok(())
+    })?;
+
+    /* Default --show is showing values for variables with the fewest constraints. */
+
+    if dispersal.is_empty() {
+        debug_assert!(retreival.is_empty());
+        retreival = variables_with_fewest_constraints(&network)
+            .map(|(_, field)| field)
+            .collect();
+        dispersal = retreival
+            .iter()
+            .map(|_| either::left(just::<Value>()))
+            .collect();
+    }
+
+    /* TODO select makes network immutable (this is probably stupid),
+     * so we can't select until after we prefetch, we can't prefetch
+     * until after we've gone through the --show and made a selection */
+    network.prefetch_attributes(&woof)?;
+
+    let mut select = network.select();
+
+    for field in retreival.into_iter() {
+        select.field(field);
+    }
+
+    for o in order_by.into_iter() {
+        select.order_by(o);
+    }
+
+    select.limit(find.limit);
+
+    if find.explain {
+        let q = select.to_query();
+        eprintln!("{}", q.as_str());
+
+        let explain = woof.explain_plan(&q).context("explain")?;
+        eprintln!("{}", explain);
+
+        return Ok(());
+    }
+
+    let results = select.to_query().disperse(
+        /* if we map a row to a single value, don't put that value in a list */
+        if dispersal.len() == 1 {
+            either::left(dispersal.into_iter().next().unwrap())
+        } else {
+            either::right(dispersal.as_mut_slice())
+        },
+        &woof,
+    )?;
+    let json = serde_json::to_string_pretty(&results)?;
+
+    println!("{}", json);
+    Ok(())
+}
+
+fn do_init(init: Args) -> anyhow::Result<()> {
+    let mut db = rusqlite::Connection::open_with_flags(&init.path, OPEN_CREATE)?;
+    let tx = db.transaction()?;
+    owoof::create_schema(&tx)?;
+    tx.commit()?;
+    eprintln!("{}", init.path.display());
+    Ok(())
+}
+
+fn do_assert(assert: Args) -> anyhow::Result<()> {
+    let mut input = open_check_tty(assert.input.as_ref())?;
+
+    let mut db = rusqlite::Connection::open_with_flags(&assert.path, OPEN_RW)?;
+    let tx = db.transaction()?;
+    let woof = DontWoof::from(tx);
+
+    type Object = std::collections::BTreeMap<owoof::Attribute, owoof::Value>;
+
+    // let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
+    let stuff: Object = serde_json::from_reader(&mut input)?;
+    let stuff: either::Either<Object, Vec<Object>> = either::left(stuff);
+
+    let id = owoof::AttributeRef::from_static(":db/id");
+
+    let mut ident_cache = std::collections::BTreeMap::default();
+
+    match stuff {
+        either::Left(one) => vec![one].into_iter(),
+        either::Right(v) => v.into_iter(),
+    }
+    .map(|obj| {
+        let e = if let Some(id) = obj.get(id) {
+            match id {
+                Value::Entity(entity) => woof.encode(*entity)?,
+                _ => anyhow::bail!(":db/id must be an Entity, like: #some-uuid-like-this"),
+            }
+        } else {
+            woof.new_entity()?
+        };
+        obj.into_iter()
+            .filter(|(ident, _)| ident.as_ref() != id)
+            .map(|(ident, v)| {
+                let a = match ident_cache.get(&ident).cloned() {
+                    Some(a) => a,
+                    None => {
+                        let encoded = woof.encode(&ident)?;
+                        let a = woof
+                            .attribute(encoded)
+                            .with_context(|| format!("attribute {}", &ident))?;
+                        if ident_cache.len() < 256 {
+                            ident_cache.insert(ident.clone(), a);
+                        }
+                        a
+                    }
+                };
+                let v = woof.encode(v)?;
+                woof.assert(e, a, v)?;
+                Ok(())
+            })
+            .collect::<Result<(), _>>()
+    })
+    .collect::<Result<(), _>>()
+    .context("meme")?;
+
+    woof.into_tx().commit().context("commit")?;
+
+    Ok(())
+}
+
+fn do_retract(_retract: Args) -> anyhow::Result<()> {
+    eprintln!("TODO");
     Ok(())
 }
 
 fn usage_and_exit(exe: &str) -> ! {
     eprintln!("usage: {} [--db <path>] [<pattern>...] [--show <show>] [--limit <num>] [--asc <show>] [--desc <show>] [--find|--explain|--explain-plan]", exe);
-    eprintln!("       {} [--db <path>] assert", exe);
-    eprintln!("       {} [--db <path>] retract", exe);
+    eprintln!("       {} [--db <path>] init", exe);
+    eprintln!("       {} [--db <path>] [--input <path>] assert", exe);
+    eprintln!("       {} [--db <path>] [--input <path>] retract", exe);
     eprintln!("");
     eprintln!("<pattern> is ?var|#some-entity-uuid ?var|:some/attribute ?var|json ");
     eprintln!("<show>    is ?var [:some/attribute...]");
@@ -169,9 +262,10 @@ fn usage_and_exit(exe: &str) -> ! {
     std::process::exit(2);
 }
 
-#[derive(Debug)]
-struct Find<'a> {
+struct Args<'a> {
+    mode: Mode,
     path: PathBuf,
+    input: Option<PathBuf>,
     show: Vec<Show<'a>>,
     patterns: Vec<Pattern<'a, Value>>,
     order: Vec<(Show<'a>, Ordering)>,
@@ -180,14 +274,21 @@ struct Find<'a> {
     // explain_plan: bool,
 }
 
-/* argument parsing ... */
-fn parse_find<'a, I>(mut args: I) -> Result<Find<'a>, ArgError<'a>>
+enum Mode {
+    Find,
+    Init,
+    Assert,
+    Retract,
+}
+
+fn parse_args<'a, I>(mut args: I) -> Result<Args<'a>, ArgError<'a>>
 where
     I: Iterator<Item = &'a str>,
 {
+    let mut mode = Mode::Find;
     let mut db = Option::<&str>::None;
+    let mut input = Option::<&str>::None;
     let mut limit = Option::<&str>::None;
-    // let mut mode = QueryMode::Find;
     let mut patterns = vec![];
     let mut show = vec![];
     let mut order = vec![];
@@ -198,6 +299,9 @@ where
             "-h" | "--help" => return Err(ArgError::Usage),
             "--db" => {
                 db.replace(args.next().ok_or(ArgError::NeedsValue(arg))?);
+            }
+            "--input" => {
+                input.replace(args.next().ok_or(ArgError::NeedsValue(arg))?);
             }
             "--limit" => {
                 limit.replace(args.next().ok_or(ArgError::NeedsValue(arg))?);
@@ -214,6 +318,9 @@ where
                 order.push((arg, Ordering::Desc));
             }
             "--explain" => explain = true,
+            "init" => mode = Mode::Init,
+            "assert" => mode = Mode::Assert,
+            "retract" => mode = Mode::Retract,
             "--" => {
                 patterns.extend(args);
                 break;
@@ -223,7 +330,8 @@ where
         }
     }
 
-    Ok(Find {
+    Ok(Args {
+        mode,
         patterns: patterns
             .into_iter()
             .map(|s| s.try_into().map_err(anyhow::Error::from))
@@ -241,6 +349,13 @@ where
                     .map_err(ArgError::invalid("--db"))
             })
             .unwrap_or_else(|| Ok(default_db_path()))?,
+        input: db
+            .map(|s| {
+                s.parse()
+                    .context("parse input path")
+                    .map_err(ArgError::invalid("--input"))
+            })
+            .transpose()?,
         order: order
             .into_iter()
             .map(|(show, ord)| {
@@ -341,4 +456,21 @@ where
         .into_iter()
         .flatten()
         .cloned()
+}
+
+use std::{fs, io};
+
+pub fn open_check_tty(input: Option<&PathBuf>) -> io::Result<Box<dyn io::Read>> {
+    match input {
+        Some(path) => {
+            let file = fs::File::open(path)?;
+            Ok(Box::new(io::BufReader::new(file)))
+        }
+        None => {
+            if atty::is(atty::Stream::Stdin) {
+                eprintln!("reading csv from stdin (and stdin looks like a tty) good luck!");
+            }
+            Ok(Box::new(io::stdin()))
+        }
+    }
 }

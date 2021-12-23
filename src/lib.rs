@@ -54,8 +54,8 @@
 //! ```
 //!
 //! It's like if we were to say:
-//! > Match every triplet having the attribute *:pet/name* with any value and for some any
-//! > entity named *?a*, match also triplets on the same entity *?a* having the attribute
+//! > Match every triplet where some entity named *?a* has the attribute *:pet/name*
+//! > with any value.  And match triplets on the same entity *?a* having the attribute
 //! > *:animal/name* with the value "Cat".
 //!
 //! Another one might be:
@@ -84,7 +84,7 @@
 //! Here's a kind of WIP example of the rust API corresponding to the patterns above:
 //!
 //! ```
-//! use owoof::{Network, ValueRef, AttributeRef};
+//! use owoof::{Network, Value, ValueRef, AttributeRef, disperse::just, traits::*};
 //!
 //! let mut network = Network::<ValueRef>::default();
 //!
@@ -103,15 +103,27 @@
 //!     .fluent_triples()
 //!     .match_attribute(":pet/name")
 //!     .eav();
-//!     
-//! // TODO finish this example with
-//! // owoof.do_meme(network.select().field(person).field(pet))?
-//! // or something
+//!
+//! # let mut db = owoof::new_in_memory().unwrap();
+//! # let woof = owoof::DontWoof::new(&mut db).unwrap();
+//! let _: Vec<(Value, Value)> = network.select()
+//!        .field(person)
+//!        .field(pet)
+//!        .to_query()
+//!        .disperse((just(), just()), &woof)
+//!        .unwrap();
+//! # // assert_eq!(
+//! # //     res,
+//! # //     vec![
+//! # //         (Value::Text("John Arbuckle".to_owned()), Value::Text("Garfield".to_owned())),
+//! # //         (Value::Text("John Arbuckle".to_owned()), Value::Text("Oide".to_owned())),
+//! # //     ],
+//! # // );
 //! ```
 //!
-//! Check out the [`network`] module for some memes ... TODO
+//! Check out the [`network`] module for some stuff about querying.
 //!
-//! The [`DontWoof`] type is the main interface around talking to SQLite.
+//! The [`DontWoof`] type is useful for mutating data.
 //!
 //! ## Crate Features
 //!
@@ -165,6 +177,12 @@ pub fn create_schema_in_transaction(db: &mut rusqlite::Connection) -> rusqlite::
     let tx = db.transaction()?;
     create_schema(&tx)?;
     tx.commit()
+}
+
+pub fn new_in_memory() -> rusqlite::Result<rusqlite::Connection> {
+    let mut db = rusqlite::Connection::open_in_memory()?;
+    create_schema_in_transaction(&mut db)?;
+    Ok(db)
 }
 
 /// TODO we only have one variant so what's the point?

@@ -9,13 +9,13 @@ A glorified query-builder inspired by [Datomic](https://docs.datomic.com/cloud/i
 that uses a datalog-like format for querying and modifying information around a SQLite
 database.
 
-Be warned, this is a toy project not meant to be used for anything serious. It's derpy
-and has (un)known issues.
+This is a pet project and probably shouldn't be used for anything serious.
 
 This is implemented as a rust library. It is documented, you can read the source or
 maybe find the [documentation published on docs.rs](https://docs.rs/owoof/*/owoof/).
 
-There is an accompanying rust executable target that provides a command-line-interface.
+There are two rust executable targets.  One provides a command-line-interface (as shown
+below) and another can be used for importing data from a csv file.
 
 ## CLI
 
@@ -125,21 +125,31 @@ $ owoof '?r :rating/score 1' \
 
 ## TODO/Caveats
 
-- Testing is poor.  Many "unit tests" require the
-  [goodbooks-10k](https://github.com/zygmuntz/goodbooks-10k) dataset to be available in
-  the project root repository.
+- Testing is not extensive at this point.
 
-- The schema isn't enforced consistently.  For example, you can destroy attributes that
-  are in use.  Unsurprisingly, this breaks things and queries will fail.  Triggers used
-  to enforce this stuff better but I removed them due to performance reasons and haven't
-  finished enforcing everything at the application-level.
+  The schema _should_ be enforced, so no deleting attributes that are in use, but I
+  haven't done the work to verify this so there might be some surprises.
 
-- Proper logging ought to be implemented.  Right now, stuff just vomits all over
-  stderr...
+- Performance is not super reliable.
+
+  Version 0.2 adds partial indexes over specific attributes and has helped a lot with
+  search performance.  However, there is no index on values.  Some queries are
+  impacted by this more than others, so performance is not reliable.
+
+  The difficulty currently with a values index is that SQLite's query planner will
+  prefer it in cases where it shouldn't.  It isn't a good index and should be a
+  last-resort -- it's also huge.
+
+- This is not feature-rich yet, constraints ensure equality and no support for
+  constraints over ranges or involving logical operations exist yet and honestly I
+  haven't tested how well it will perform with the schema changes made in 0.2.
+
+- owoof-csv needs a way to remap ids, so instead `:rating/book` joining with `:book/id`
+  it joins to `:db/id`.
 
 ## See Also
 
-My blog post associated with this software: https://froghat.ca/blag/dont-woof
+My blog post associated with version 0.1 this software: https://froghat.ca/blag/dont-woof
 
 #### License
 

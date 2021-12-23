@@ -13,8 +13,7 @@
 //! # use owoof::disperse::{just, zip_with_keys, Query};
 //! # use rusqlite::Connection;
 //! #
-//! # let mut db = rusqlite::Connection::open_in_memory().unwrap();
-//! # owoof::create_schema_in_transaction(&mut db).unwrap();
+//! # let mut db = owoof::new_in_memory().unwrap();
 //! # let woof = owoof::DontWoof::new(&mut db).unwrap();
 //! #
 //! // FromSqlRow is implemented on tuples & arrays.

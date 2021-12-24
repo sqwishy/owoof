@@ -11,10 +11,10 @@
 //! # use owoof::{NamedNetwork, Value, ValueRef, Pattern};
 //! #[cfg(feature = "serde_json")]
 //! {
-//! let mut network = NamedNetwork::<_>::default();
-//! let pattern = r#"?p :pet/name "Garfield""#
-//!         .try_into().expect("parse pattern");
-//! network.add_pattern(&pattern);
+//!     let mut network = NamedNetwork::<_>::default();
+//!     let pattern = r#"?p :pet/name "Garfield""#
+//!             .try_into().expect("parse pattern");
+//!     network.add_pattern(&pattern);
 //! }
 //! ```
 //!
@@ -22,6 +22,19 @@
 //!
 //! So if I add another pattern `?p :animal/name "Cat"`, there will be a constraint linking the
 //! `?p` variables together.
+//!
+//! Also, a [`GenericNetwork`] specifies the FROM clause of a SELECT in SQL, everything else goes on
+//! to a [`Select`] object that can be returned by [`GenericNetwork::select()`].
+//!
+//! A [`Select`] has [`crate::sql::PushToQuery::to_query`] returning a
+//! [`crate::sql::Query`].  And you can execute a [`crate::sql::Query`] with
+//! [`crate::sql::Query::disperse`].  (There should be an example of this at the root of the
+//! documentation in lib.rs.)
+//!
+//! See the [dispersal](crate::disperse) module about executing a query and reading data back from
+//! SQLite.
+//!
+//! ---
 //!
 //! > "I need some information."
 //! >

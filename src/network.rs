@@ -28,36 +28,37 @@
 //!
 //! This is how you might use the API to build that [`Network`].
 //! ```
-//! # use owoof::Network;
+//! # use owoof::{Network, AttributeRef};
 //! let mut network: Network = Default::default();
 //! // ?b :book/title "The Complete Calvin and Hobbes"
 //! let b = network
 //!     .fluent_triples()
-//!     .match_attribute(":book/title")
+//!     .match_attribute(AttributeRef::from_static(":book/title"))
 //!     .match_value("The Complete Calvin and Hobbes")
 //!     .entity();
 //! // ?r :review/book ?b
 //! let r = network
 //!     .fluent_triples()
-//!     .match_attribute(":review/book")
+//!     .match_attribute(AttributeRef::from_static(":review/book"))
 //!     .link_value(b)
 //!     .entity();
 //! // ?r :review/user ?u
 //! let u = network
 //!     .fluent_triples()
 //!     .link_entity(r)
-//!     .match_attribute(":review/user")
+//!     .match_attribute(AttributeRef::from_static(":review/user"))
 //!     .value();
 //! // ?r :review/score 1
 //! network
 //!     .fluent_triples()
 //!     .link_entity(r)
-//!     .match_attribute(":review/book")
+//!     .match_attribute(AttributeRef::from_static(":review/book"))
 //!     .match_value(1)
 //!     .entity();
 //! ```
 use std::ops::Deref;
 
+use crate::types::AttributeRef;
 use crate::{soup::Encoded, Value, ValueRef};
 
 /// A borrowing type alias for [`GenericNetwork`] using [`ValueRef`].
@@ -192,6 +193,7 @@ where
         attribute: A,
     ) -> TriplesField
     where
+        A: AsRef<AttributeRef>,
         V: From<A>,
     {
         let value = self
@@ -316,7 +318,10 @@ impl<'n, V> FluentTriples<'n, V> {
         self
     }
 
-    pub fn match_attribute<I: Into<V>>(&mut self, i: I) -> &mut Self {
+    pub fn match_attribute<I: AsRef<AttributeRef>>(&mut self, i: I) -> &mut Self
+    where
+        V: From<I>,
+    {
         self.network.add_constraint(Constraint::Eq {
             lh: self.triples.attribute(),
             rh: Match::Value(i.into()),

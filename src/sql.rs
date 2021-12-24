@@ -410,7 +410,7 @@ impl<P> PushToQuery<P> for Ordering {
 #[cfg(test)]
 mod tests {
     use crate::tests::rusqlite_in_memory;
-    use crate::{traits::*, Network};
+    use crate::{traits::*, AttributeRef, Network};
 
     /* some of these examples are kind of stupid but if the network has
      * no constraints it should probably not fetch anything -- as opposed
@@ -428,7 +428,9 @@ mod tests {
     fn test_select_nothing_from() {
         let db = rusqlite_in_memory().expect("rusqlite_in_memory");
         let mut network: Network = Network::default();
-        network.fluent_triples().match_attribute(":db/attribute");
+        network
+            .fluent_triples()
+            .match_attribute(AttributeRef::from_static(":db/attribute"));
         let query = network.select().to_query();
         assert!(db.prepare(query.as_str()).is_ok());
     }

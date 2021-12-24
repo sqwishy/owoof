@@ -147,6 +147,21 @@ $ owoof '?r :rating/score 1' \
 - owoof-csv needs a way to remap ids, so instead `:rating/book` joining with `:book/id`
   it joins to `:db/id`.
 
+## Internal TODOs
+
+- Actually address the csv import id remap above.
+
+- Create DontWoof off the Connection.
+
+- The Select borrowing Network is a bit weird.  I tried to split it off but it was still
+  weird.  Not sure what to do about that.  One consideration is that pushing a Select on
+  to a Query only borrows from the network.  Maybe this could be relaxed?
+
+- Test reference counting?  Add a clean-up that removes soups with zero rc and runs
+  pragma optimize.
+
+- Maybe add some sort of update thing to shorthand retract & assert?
+
 ## See Also
 
 My blog post associated with version 0.1 this software: https://froghat.ca/blag/dont-woof

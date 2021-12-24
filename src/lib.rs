@@ -90,18 +90,18 @@
 //!
 //! let (p, _, person) = network
 //!     .fluent_triples()
-//!     .match_attribute(":person/name")
+//!     .match_attribute(AttributeRef::from_static(":person/name"))
 //!     .eav();
 //!
 //! let (a, _, _) = network
 //!     .fluent_triples()
-//!     .match_attribute(":pet/human")
+//!     .match_attribute(AttributeRef::from_static(":pet/human"))
 //!     .link_value(p)
 //!     .eav();
 //!
 //! let (a, _, pet) = network
 //!     .fluent_triples()
-//!     .match_attribute(":pet/name")
+//!     .match_attribute(AttributeRef::from_static(":pet/name"))
 //!     .eav();
 //!
 //! # let mut db = owoof::new_in_memory().unwrap();
@@ -524,15 +524,6 @@ impl<'tx> From<rusqlite::Transaction<'tx>> for DontWoof<'tx> {
                 }
             }
         };
-
-        tx.commit_hook(Some(|| {
-            eprintln!("rollback");
-            true
-        }));
-
-        tx.rollback_hook(Some(|| {
-            eprintln!("rollback");
-        }));
 
         DontWoof {
             tx: HookedTransaction::new(tx, hook),

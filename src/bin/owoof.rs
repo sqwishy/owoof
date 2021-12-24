@@ -84,6 +84,20 @@ fn do_find(find: Args) -> anyhow::Result<()> {
             let field = network
                 .names
                 .lookup(&show.variable)
+                .or_else(|err| {
+                    /* A special case?
+                     *
+                     * Generally we want the network to be a connected graph so we fail on
+                     * unmatched variables.  But if the graph is empty, just go for it. */
+                    if network.triples() == 0 {
+                        Ok(network
+                            .fluent_triples()
+                            .match_attribute(AttributeRef::from_static(":db/id"))
+                            .entity())
+                    } else {
+                        Err(err)
+                    }
+                })
                 .with_context(|| anyhow::anyhow!("cannot show `{}`", &show.variable))?;
 
             /* If there are no attributes, show ?var.
@@ -142,6 +156,8 @@ fn do_find(find: Args) -> anyhow::Result<()> {
      * so we can't select until after we prefetch, we can't prefetch
      * until after we've gone through the --show and made a selection */
     network.prefetch_attributes(&woof)?;
+
+    eprintln!("{:#?}", network);
 
     let mut select = network.select();
 
@@ -388,9 +404,9 @@ where
         }
     }
 
-    if matches!(mode, Mode::Find) && patterns.is_empty() {
-        return Err(ArgError::Usage); /* ¯\_(ツ)_/¯*/
-    }
+    // if matches!(mode, Mode::Find) && patterns.is_empty() {
+    //     return Err(ArgError::Usage); /* ¯\_(ツ)_/¯*/
+    // }
 
     Ok(Args {
         mode,

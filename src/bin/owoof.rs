@@ -157,8 +157,6 @@ fn do_find(find: Args) -> anyhow::Result<()> {
      * until after we've gone through the --show and made a selection */
     network.prefetch_attributes(&woof)?;
 
-    eprintln!("{:#?}", network);
-
     let mut select = network.select();
 
     for field in retreival.into_iter() {

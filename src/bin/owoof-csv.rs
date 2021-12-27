@@ -5,7 +5,7 @@ use std::error::Error;
 use std::iter;
 use std::path::PathBuf;
 
-use owoof::{AttributeRef, DontWoof, Optional, ValueRef};
+use owoof::{AttributeRef, DontWoof, Optional};
 
 use rusqlite::OpenFlags;
 
@@ -15,54 +15,50 @@ use anyhow::Context;
 struct Args<'a> {
     db: PathBuf,
     input: Option<PathBuf>,
-    mappings: Vec<Mapping<'a>>,
+    mappings: Vec<ToAttribute<'a>>,
     dry_run: bool,
     limit: usize,
+    output: bool,
+    csv_delimiter: u8,
 }
 
 #[derive(Debug)]
-struct Mapping<'a> {
-    attribute: &'a AttributeRef,
+struct ToAttribute<'a> {
     column: Cow<'a, str>,
+    attribute: &'a AttributeRef,
+}
+
+#[derive(Debug)]
+struct ToPosition<'a> {
+    attribute: &'a AttributeRef,
+    position: usize,
 }
 
 fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
     let input = open_check_tty(args.input.as_ref())?;
 
-    let mut reader = csv::Reader::from_reader(input);
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
+        .delimiter(args.csv_delimiter)
+        .from_reader(input);
     let headers = reader.headers()?;
-    let take_indices = args
-        .mappings
-        .iter()
-        .map(|mapping| {
-            headers
-                .iter()
-                .position(|h| h == mapping.column)
-                .ok_or(mapping)
-        })
-        .collect::<Result<Vec<usize>, _>>()
-        .map_err(|mapping| {
-            let headers = headers
-                .iter()
-                .flat_map(|s| iter::once("\n» ").chain(iter::once(s)))
-                .collect::<String>();
-            anyhow::anyhow!(
-                "failed find column `{}` in headers:{}",
-                mapping.column,
-                headers
-            )
-        })?;
+    let mut to_positions = lookup_header_indices(headers, args.mappings.as_slice())?;
 
     if args.dry_run {
         eprintln!("the following mappings were planned");
 
-        args.mappings.iter().for_each(|mapping| {
+        for mapping in args.mappings {
             eprintln!("{}\t{}", mapping.attribute, mapping.column);
-        });
+        }
 
         eprintln!("but this is a dry run, nothing will be imported");
         return Ok(());
     }
+
+    let id_mapping: Option<ToPosition> = to_positions
+        .iter()
+        .position(|m| m.attribute == AttributeRef::from_static(":db/id"))
+        .map(|i| to_positions.remove(i));
 
     let mut db = rusqlite::Connection::open_with_flags(
         &args.db,
@@ -70,37 +66,46 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
     )?;
     let woof = DontWoof::new(&mut db)?;
 
-    let db_attribute = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
-
-    let attributes = args
-        .mappings
-        .iter()
-        .map(|m| {
-            let ident = woof.encode(m.attribute)?;
-            match woof.attribute(ident).optional()? {
-                Some(attribute) => Ok(attribute),
-                None => woof
-                    .fluent_entity()?
-                    .assert(db_attribute, ident)
-                    .map(owoof::Encoded::<owoof::Entity>::from),
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .context("encode attribute")?;
+    /* attribute identifiers -> attribute entities */
+    let attributes = find_or_assert_attributes(&woof, args.mappings.as_slice())?;
 
     let mut records_seen = 0usize;
     let mut limit = (0 != args.limit).then(|| args.limit);
+    let mut output = if args.output {
+        let mut w = csv::WriterBuilder::new()
+            .delimiter(args.csv_delimiter)
+            .from_writer(io::stdout());
+        /* write headers */
+        w.write_record(
+            &iter::once(":db/id")
+                .chain(headers.iter())
+                .collect::<csv::StringRecord>(),
+        )?;
+        Some(w)
+    } else {
+        None
+    };
 
     let mut record = csv::StringRecord::new();
     while Some(0) != limit && reader.read_record(&mut record)? {
-        let e = woof.new_entity()?;
+        let e = if let Some(ToPosition { position, .. }) = id_mapping {
+            let entity = record
+                .get(position)
+                .context("no value")?
+                .parse::<owoof::Entity>()
+                .context("parse entity")?;
+            woof.encode(entity)?
+        } else {
+            woof.new_entity()?
+        };
 
-        take_indices
+        to_positions
             .iter()
             .zip(attributes.iter().cloned())
-            .map(|(&idx, a)| {
-                let text = record.get(idx).context("no value")?;
-                woof.encode(parse_value(text))
+            .map(|(to, a): (&ToPosition, _)| {
+                let text = record.get(to.position).context("no value")?;
+                let value = owoof::types::parse_value(text);
+                woof.encode(value)
                     .and_then(|v| woof.assert(e, a, v).map(drop))
                     .with_context(|| format!("failed to assert {:?}", text))
             })
@@ -113,7 +118,16 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
             })?;
 
         records_seen += 1;
+
         limit.as_mut().map(|l| *l -= 1);
+
+        if let Some(output) = output.as_mut() {
+            output.write_record(
+                &iter::once(woof.decode(e)?.to_string().as_str())
+                    .chain(record.iter())
+                    .collect::<csv::StringRecord>(),
+            )?;
+        }
     }
 
     woof.optimize()?;
@@ -124,15 +138,50 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn parse_value(s: &str) -> ValueRef<'_> {
-    Option::<ValueRef>::None
-        .or_else(|| s.parse::<owoof::Entity>().map(ValueRef::from).ok())
-        .or_else(|| s.try_into().map(ValueRef::Attribute).ok())
-        .or_else(|| s.parse::<bool>().map(ValueRef::from).ok())
-        .or_else(|| s.parse::<i64>().map(ValueRef::from).ok())
-        .or_else(|| s.parse::<f64>().map(ValueRef::from).ok())
-        .or_else(|| s.parse::<uuid::Uuid>().map(ValueRef::from).ok())
-        .unwrap_or(ValueRef::Text(s))
+fn lookup_header_indices<'a>(
+    headers: &csv::StringRecord,
+    mappings: &[ToAttribute<'a>],
+) -> anyhow::Result<Vec<ToPosition<'a>>> {
+    mappings
+        .iter()
+        .map(|to| {
+            let ToAttribute { attribute, column } = to;
+            headers
+                .iter()
+                .position(|h| h == column)
+                .map(|position| ToPosition { attribute, position })
+                .ok_or(column)
+        })
+        .collect::<Result<Vec<ToPosition<'a>>, _>>()
+        .map_err(|column| {
+            let headers = headers
+                .iter()
+                .flat_map(|s| iter::once("\n» ").chain(iter::once(s)))
+                .collect::<String>();
+            anyhow::anyhow!("failed find column `{}` in headers:{}", column, headers)
+        })
+}
+
+fn find_or_assert_attributes<'a>(
+    woof: &DontWoof,
+    mappings: &[ToAttribute<'a>],
+) -> anyhow::Result<Vec<owoof::Encoded<owoof::Entity>>> {
+    let db_attribute = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
+
+    mappings
+        .iter()
+        .map(|m| {
+            let ident = woof.encode(m.attribute)?;
+            match woof.attribute(ident).optional()? {
+                Some(attribute) => Ok(attribute),
+                None => woof
+                    .fluent_entity()?
+                    .assert(db_attribute, ident)
+                    .map(owoof::Encoded::<owoof::Entity>::from),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .context("encode attribute")
 }
 
 fn main() {
@@ -174,9 +223,11 @@ fn usage_and_exit(exe: &str) -> ! {
     eprintln!("usage: {} [options...] <mappings...>", exe);
     eprintln!("");
     eprintln!("[options...] is a sequence of any of the following.");
-    eprintln!("\t-n, --dry-run");
+    eprintln!("\t-l, --limit N\timport only N rows, import everything if N is zero");
+    eprintln!("\t-n, --dry-run\tcheck csv mappings but don't modify the database");
+    eprintln!("\t-o, --output \twrites inserted :db/id to stdout (see below for more detail)");
     eprintln!(
-        "\t--db <{}> (defaults to OWOOF_DB environment variable)",
+        "\t--db         \t<{}> (defaults to OWOOF_DB environment variable)",
         default_db_path().display()
     );
     eprintln!("\t-i, --input <input.csv> (defaults to stdin)");
@@ -184,6 +235,8 @@ fn usage_and_exit(exe: &str) -> ! {
     eprintln!("<mappings...> is a sequence that arguments that map csv headers to attributes.");
     eprintln!("\t':pet/name pet_name'\twill read values in the column pet_name and assert them with the :pet/name attribute");
     eprintln!("\t':pet/name'         \twill defaults the column name to `name`, the part after / with non-alphabet characters replaced with _");
+    eprintln!("");
+    eprintln!("Each row imported is an entity added to the database.  When --output is passed, a copy of the input csv is written to stdout along with a :db/id column that includes the entity id of each row.");
     eprintln!("");
     eprintln!("We try to convert values into an entity, attribute, number, or uuid before giving up and just inserting it as text.");
     std::process::exit(2);
@@ -198,11 +251,18 @@ where
     let mut mappings = Vec::<&str>::default();
     let mut dry_run = false;
     let mut limit = 0usize;
+    let mut output = false;
+    let mut csv_delimiter = ",";
 
     while let Some(arg) = args.next() {
         match arg {
             "-h" | "--help" => return Err(ArgError::Usage),
             "-n" | "--dry-run" => dry_run = true,
+            "-o" | "--output" => output = true,
+            "-d" | "--delimiter" => {
+                csv_delimiter = args.next().ok_or(ArgError::NeedsValue(arg))?
+            }
+
             "-l" | "--limit" => {
                 limit = args
                     .next()
@@ -226,6 +286,7 @@ where
     }
 
     Ok(Args {
+        output,
         dry_run,
         limit,
         db: db
@@ -247,10 +308,16 @@ where
             .map(|s| parse_mapping(s))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(ArgError::invalid("<mappings...>"))?,
+        csv_delimiter: {
+            (csv_delimiter.len() == 1)
+                .then(|| csv_delimiter.bytes().next().unwrap())
+                .context("expected a single byte")
+                .map_err(ArgError::invalid("--delimiter"))?
+        },
     })
 }
 
-fn parse_mapping<'a>(s: &'a str) -> anyhow::Result<Mapping<'a>> {
+fn parse_mapping<'a>(s: &'a str) -> anyhow::Result<ToAttribute<'a>> {
     let attribute = s.split_whitespace().next().unwrap_or(s);
     let rest = s[attribute.len()..].trim();
 
@@ -262,7 +329,7 @@ fn parse_mapping<'a>(s: &'a str) -> anyhow::Result<Mapping<'a>> {
         rest.into()
     };
 
-    Ok(Mapping { attribute, column })
+    Ok(ToAttribute { attribute, column })
 }
 
 fn guess_csv_header_from_attribute(attribute: &AttributeRef) -> String {

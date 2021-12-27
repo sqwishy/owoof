@@ -84,7 +84,7 @@ create table "triples"
 --            '?more-great-takes :rating/book ?b' \
 --            '?more-great-takes :rating/score 5' \
 --     --show '?b :book/title :book/avg-rating' \
---     --asc  '?b :book/avg-rating' --db /tmp/owoof-three.sqlitep
+--     --asc  '?b :book/avg-rating' --db /tmp/owoof-three.sqlite
 -- create index "triples-v" on "triples" (v);
 
 -- created programatically by the owoof library

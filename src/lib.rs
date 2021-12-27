@@ -391,13 +391,10 @@ impl<'tx> DontWoof<'tx> {
                   AND v = ?"#,
         )?;
         let n = stmt.execute(&[&e.rowid, &a.rowid, &v.rowid])?;
-        assert_eq!(n, 1);
 
-        /* This kind of sucks because it's a super rare event but requires accessing a RefCell
-         * and unlocking a Mutex.  Using an AtomicBool to flag buffer emptiness allow an early exit
-         * doesn't improve performance much (~8ms down to ~6ms) and overall this check is ~less
-         * than %1 of an import.  So it's not worth worrying about this too much. */
-        self._update_attribute_indexes()?;
+        if 0 < n {
+            self._update_attribute_indexes()?;
+        }
 
         Ok(self)
     }

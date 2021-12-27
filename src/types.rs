@@ -103,6 +103,7 @@ impl From<String> for Value {
     }
 }
 
+/* Conflicts with TryFrom<&str> ... */
 impl<'a> From<&'a str> for ValueRef<'a> {
     fn from(s: &'a str) -> Self {
         ValueRef::Text(s)
@@ -175,71 +176,58 @@ impl<'a> From<&'_ ValueRef<'a>> for ValueRef<'a> {
     }
 }
 
-#[cfg(feature = "serde_json")]
-/// Requires the `serde_json` feature.
-pub fn parse_value(s: &str) -> Option<Value> {
-    use serde_json::from_str as json;
-
+/// Figure out an appropriate [`Value`] variant from some text.
+///
+/// Tries to read it as an #entity :attribute number boolean uuid and if all those fail it just
+/// eats the whole input as a text value.  Uses [`FromStr`] so refer to that implementation on
+pub fn parse_value(s: &str) -> Value {
     Option::<Value>::None
         .or_else(|| s.parse::<Entity>().map(Value::from).ok())
         .or_else(|| s.parse::<Attribute>().map(Value::from).ok())
-        .or_else(|| json::<String>(s).map(Value::from).ok())
-        .or_else(|| json::<i64>(s).map(Value::from).ok())
-        .or_else(|| json::<f64>(s).map(Value::from).ok())
-        .or_else(|| json::<bool>(s).map(Value::from).ok())
+        .or_else(|| s.parse::<i64>().map(Value::from).ok())
+        .or_else(|| s.parse::<f64>().map(Value::from).ok())
+        .or_else(|| s.parse::<bool>().map(Value::from).ok())
         .or_else(|| s.parse::<uuid::Uuid>().map(Value::from).ok())
+        .unwrap_or_else(|| Value::Text(s.to_owned()))
 }
 
 #[cfg(feature = "serde_json")]
 /// Requires the `serde_json` feature.
 impl FromStr for Value {
-    type Err = ();
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_value(s).ok_or(())
+        Ok(parse_value(s))
     }
 }
 
-#[cfg(feature = "serde_json")]
-/// Requires the `serde_json` feature.
 impl TryFrom<&str> for Value {
     type Error = ();
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        s.parse()
+        s.parse().map_err(|_| ())
     }
 }
 
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Value {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Container<'a> {
-            Float(f64),
-            Integer(i64),
-            Boolean(bool),
-            Text(Cow<'a, str>),
-            Bytes(Cow<'a, [u8]>),
-        }
-
-        let s: Container = serde::Deserialize::deserialize(deserializer)?;
-        Ok(match s {
-            Container::Float(f) => Value::from(f),
-            Container::Integer(i) => Value::from(i),
-            Container::Boolean(b) => Value::from(b),
-            Container::Text(t) => Option::<Value>::None
-                .or_else(|| t.parse::<Entity>().map(Value::from).ok())
-                .or_else(|| t.parse::<Attribute>().map(Value::from).ok())
-                .or_else(|| t.parse::<uuid::Uuid>().map(Value::from).ok())
-                .unwrap_or_else(|| Value::Text(t.into())),
-            Container::Bytes(b) => Value::Blob(b.into()),
-        })
-    }
-}
+// #[cfg(feature = "serde_json")]
+// /// Requires the `serde_json` feature.
+// impl<'a> TryFrom<&'a str> for ValueRef<'a> {
+//     type Error = ();
+//
+//     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+//         use serde_json::from_str as json;
+//
+//         Option::<ValueRef>::None
+//             .or_else(|| s.parse::<Entity>().map(ValueRef::from).ok())
+//             .or_else(|| AttributeRef::from_str(s).map(ValueRef::from).ok())
+//             .or_else(|| json::<&str>(s).map(ValueRef::Text).ok())
+//             .or_else(|| json::<i64>(s).map(ValueRef::from).ok())
+//             .or_else(|| json::<f64>(s).map(ValueRef::from).ok())
+//             .or_else(|| json::<bool>(s).map(ValueRef::from).ok())
+//             .or_else(|| s.parse::<uuid::Uuid>().map(ValueRef::from).ok())
+//             .ok_or(())
+//     }
+// }
 
 /// A uuid referring to an entity.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -508,6 +496,72 @@ pub mod _serde {
             let s: Cow<str> = Deserialize::deserialize(deserializer)?;
             s.parse().map_err(serde::de::Error::custom)
         }
+    }
+
+    impl<'de> Deserialize<'de> for Value {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum Container<'a> {
+                Float(f64),
+                Integer(i64),
+                Boolean(bool),
+                Text(Cow<'a, str>),
+                Bytes(Cow<'a, [u8]>),
+            }
+
+            let s: Container = Deserialize::deserialize(deserializer)?;
+            Ok(match s {
+                Container::Float(f) => Value::from(f),
+                Container::Integer(i) => Value::from(i),
+                Container::Boolean(b) => Value::from(b),
+                Container::Text(t) => Option::<Value>::None
+                    .or_else(|| t.parse::<Entity>().map(Value::from).ok())
+                    .or_else(|| t.parse::<Attribute>().map(Value::from).ok())
+                    .or_else(|| t.parse::<uuid::Uuid>().map(Value::from).ok())
+                    .unwrap_or_else(|| Value::Text(t.into())),
+                Container::Bytes(b) => Value::Blob(b.into()),
+            })
+        }
+    }
+
+    #[feature("serde_json")]
+    #[test]
+    fn test_parsing() {
+        assert_eq!(
+            "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                .parse::<Value>()
+                .unwrap(),
+            "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                .parse::<uuid::Uuid>()
+                .map(Value::Uuid)
+                .unwrap(),
+        );
+        assert_eq!(
+            "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                .parse::<Value>()
+                .unwrap(),
+            "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                .parse::<Entity>()
+                .map(Value::Entity)
+                .unwrap(),
+        );
+        assert_eq!(
+            "\"db/id\"".parse::<Value>().unwrap(),
+            Value::Text("db/id".to_owned()),
+        );
+        assert_eq!(
+            ":db/id".parse::<Value>().unwrap(),
+            ":db/id".parse::<Attribute>().map(Value::Attribute).unwrap(),
+        );
+
+        // assert_eq!(
+        //     ValueRef::try_from("\"foo\"").unwrap(),
+        //     ValueRef::Text("foo"),
+        // );
     }
 }
 

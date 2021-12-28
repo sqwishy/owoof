@@ -4,18 +4,24 @@
 //! in the network.
 //!
 //! [`NamedNetwork::add_pattern`] allows adding a constraint from a [`Pattern`] which can be
-//! parsed from a string when the `serde_json` feature is enabled (required to parse the value
-//! stuff).
+//! parsed from a string. See [`types::parse_value`] on how parsing is attempted.
 //!
 //! ```
-//! # use owoof::{NamedNetwork, Value, ValueRef, Pattern};
-//! #[cfg(feature = "serde_json")]
-//! {
-//!     let mut network = NamedNetwork::<_>::default();
-//!     let pattern = r#"?p :pet/name "Garfield""#
-//!             .try_into().expect("parse pattern");
-//!     network.add_pattern(&pattern);
-//! }
+//! # use owoof::{NamedNetwork, Value, ValueRef, Attribute, Pattern, BorrowedParse};
+//! # use owoof::{Variable, either::{Left, Right}};
+//! let mut network = NamedNetwork::<ValueRef>::default();
+//! let pattern = r#"?p :pet/name "Garfield""#
+//!         .borrowed_parse()
+//!         .expect("parse pattern");
+//! assert_eq!(
+//!     pattern,
+//!     Pattern {
+//!         entity: Left(Variable::Unify("?p")),
+//!         attribute: Right(Value::Attribute(Attribute::from_static(":pet/name"))),
+//!         value: Right(Value::Text("Garfield".to_owned())),
+//!     }
+//! );
+//! network.add_pattern(&pattern);
 //! ```
 //!
 //! One nice thing about this is that variables are automatically unified.
@@ -48,9 +54,10 @@ use thiserror::Error;
 use crate::either::Either;
 use crate::network::{GenericNetwork, Ordering, Triples, TriplesField};
 use crate::types::{Attribute, AttributeParseError, Entity, EntityParseError};
+use crate::FromBorrowedStr;
 
 #[cfg(feature = "serde_json")]
-use crate::types::Value;
+use crate::Value;
 
 /* TODO call this Shape or Gather to sound less SQL? */
 /// LIMIT, ORDER BY, and SELECT clauses forming an entire SELECT statement.
@@ -233,8 +240,8 @@ pub enum NamesLookupError {
 /// whatever so you can add them to a `Vec` or iterate over them or otherwise interact with them
 /// all the same.
 ///
-/// [`Pattern<'a, Value>`] implements `TryFrom<&str>` but only when the `serde_json` feature is
-/// enabled.
+/// Can be parsed but must borrow the input string because [`Variable`]s always borrow.  See
+/// [`BorrowedParse`] about that.  Also requires the `serde_json` feature to parse a [`Value`].
 #[derive(Debug, PartialEq)]
 pub struct Pattern<'a, V> {
     pub entity: Either<Variable<'a>, V>,
@@ -242,8 +249,18 @@ pub struct Pattern<'a, V> {
     pub value: Either<Variable<'a>, V>,
 }
 
-#[cfg(feature = "serde_json")]
 /// Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
+impl<'a> FromBorrowedStr<'a> for Pattern<'a, Value> {
+    type Err = PatternParseError;
+
+    fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err> {
+        parse_pattern(s)
+    }
+}
+
+/// Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
 pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseError> {
     let (s, e) = take_no_whitespace(s);
     let (s, a) = take_no_whitespace(s);
@@ -252,13 +269,11 @@ pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseE
     return Ok(Pattern {
         entity: parse_variable_or_entity(e)
             .map_err(|(v, e)| PatternParseError::Entity(v, e))?
-            .map_right(Value::from),
+            .map_right(Value::Entity),
         attribute: parse_variable_or_attribute(a)
             .map_err(|(v, a)| PatternParseError::Attribute(v, a))?
-            .map_right(Value::from),
-        value: v
-            .try_into()
-            .map_err(|(v, ())| PatternParseError::Value(v))?,
+            .map_right(Value::Attribute),
+        value: parse_variable_or_value(v).map_err(|(v, ())| PatternParseError::Value(v))?,
     });
 
     fn take_no_whitespace(s: &str) -> (&str, &str) {
@@ -268,14 +283,23 @@ pub fn parse_pattern<'a>(s: &'a str) -> Result<Pattern<'a, Value>, PatternParseE
     }
 }
 
-#[cfg(feature = "serde_json")]
-/// Requires the `serde_json` feature.
-impl<'a> TryFrom<&'a str> for Pattern<'a, Value> {
-    type Error = PatternParseError;
+pub fn parse_variable_or_entity<'a>(
+    s: &'a str,
+) -> Result<Either<Variable<'a>, Entity>, (VariableParseError, EntityParseError)> {
+    Either::from_borrowed_str(s)
+}
 
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        parse_pattern(s)
-    }
+pub fn parse_variable_or_attribute<'a>(
+    s: &'a str,
+) -> Result<Either<Variable<'a>, Attribute>, (VariableParseError, AttributeParseError)> {
+    Either::from_borrowed_str(s)
+}
+
+#[cfg(feature = "serde_json")]
+pub fn parse_variable_or_value<'a>(
+    s: &'a str,
+) -> Result<Either<Variable<'a>, Value>, (VariableParseError, ())> {
+    Either::from_borrowed_str(s)
 }
 
 #[derive(Debug, Error)]
@@ -284,20 +308,8 @@ pub enum PatternParseError {
     Entity(VariableParseError, EntityParseError),
     #[error("not a variable ({}) and not an attribute ({})", .0, .1)]
     Attribute(VariableParseError, AttributeParseError),
-    #[error("not a variable ({}) and not a JSON value", .0)]
+    #[error("not a variable ({}) and not a value", .0)]
     Value(VariableParseError),
-}
-
-pub fn parse_variable_or_entity<'a>(
-    s: &'a str,
-) -> Result<Either<Variable<'a>, Entity>, (VariableParseError, EntityParseError)> {
-    s.try_into()
-}
-
-pub fn parse_variable_or_attribute<'a>(
-    s: &'a str,
-) -> Result<Either<Variable<'a>, Attribute>, (VariableParseError, AttributeParseError)> {
-    s.try_into()
 }
 
 #[derive(Debug, PartialEq)]
@@ -312,6 +324,15 @@ impl<'a> fmt::Display for Variable<'a> {
             Variable::Any => write!(f, "?"),
             Variable::Unify(v) => write!(f, "{}", v),
         }
+    }
+}
+
+/// Allows `Either<Variable, _>` to implement [`FromBorrowedStr`].
+impl<'a> FromBorrowedStr<'a> for Variable<'a> {
+    type Err = VariableParseError;
+
+    fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err> {
+        parse_variable(s)
     }
 }
 
@@ -332,14 +353,6 @@ pub fn parse_variable<'a>(s: &'a str) -> Result<Variable<'a>, VariableParseError
     }
 
     Ok(Variable::Unify(s))
-}
-
-impl<'a> TryFrom<&'a str> for Variable<'a> {
-    type Error = VariableParseError;
-
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        parse_variable(s)
-    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -363,8 +376,8 @@ mod tests {
         assert_eq!(parse_variable("?"), Ok(Variable::Any));
     }
 
-    #[test]
     #[cfg(feature = "serde_json")]
+    #[test]
     fn test_parse_pattern() {
         assert_eq!(
             parse_pattern("? ? ?asdf").unwrap(),

@@ -104,7 +104,7 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
             .zip(attributes.iter().cloned())
             .map(|(to, a): (&ToPosition, _)| {
                 let text = record.get(to.position).context("no value")?;
-                let value = owoof::types::parse_value(text);
+                let value: owoof::Value = todo!();
                 woof.encode(value)
                     .and_then(|v| woof.assert(e, a, v).map(drop))
                     .with_context(|| format!("failed to assert {:?}", text))

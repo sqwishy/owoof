@@ -148,6 +148,7 @@ use rusqlite::hooks::Action;
 use rusqlite::{OptionalExtension, ToSql};
 
 use std::cell::RefCell;
+use std::str::FromStr;
 use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, Mutex};
 
@@ -155,13 +156,14 @@ use crate::driver::{TypeTag, ENTITY_ID_TAG};
 
 pub use crate::either::Either;
 pub use crate::network::{GenericNetwork, Network, Ordering, OwnedNetwork};
-pub use crate::retrieve::{NamedNetwork, Pattern};
+pub use crate::retrieve::{NamedNetwork, Pattern, Variable};
 pub use crate::soup::Encoded;
 pub use crate::types::{Attribute, AttributeRef, Entity, Value, ValueRef};
 
 /// This is just supposed to be some helpful traits re-exported but there's only the one thing in
 /// it so there's not much point...
 pub mod traits {
+    pub use super::{BorrowedParse, FromBorrowedStr};
     pub use crate::sql::PushToQuery;
 }
 
@@ -588,25 +590,68 @@ pub mod either {
         }
     }
 
-    impl<'a, L, R> TryFrom<&'a str> for Either<L, R>
+    use super::FromBorrowedStr;
+
+    impl<'a, L, R> FromBorrowedStr<'a> for Either<L, R>
     where
-        L: TryFrom<&'a str>,
-        R: TryFrom<&'a str>,
+        L: FromBorrowedStr<'a>,
+        R: FromBorrowedStr<'a>,
     {
-        type Error = (
-            <L as TryFrom<&'a str>>::Error,
-            <R as TryFrom<&'a str>>::Error,
+        type Err = (
+            <L as FromBorrowedStr<'a>>::Err,
+            <R as FromBorrowedStr<'a>>::Err,
         );
 
-        fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-            L::try_from(s).map(Either::Left).or_else(|a_err| {
-                R::try_from(s)
+        fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err> {
+            L::from_borrowed_str(s).map(Either::Left).or_else(|a_err| {
+                R::from_borrowed_str(s)
                     .map(Either::Right)
                     .map_err(|b_err| (a_err, b_err))
             })
         }
     }
 }
+
+pub trait FromBorrowedStr<'a>: Sized {
+    type Err;
+    fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err>;
+}
+
+/// Anything that implements [`FromStr`] implements FromBorrowedStr
+impl<'a, T> FromBorrowedStr<'a> for T
+where
+    T: FromStr,
+{
+    type Err = <T as FromStr>::Err;
+
+    fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err> {
+        s.parse()
+    }
+}
+
+pub trait BorrowedParse<'a> {
+    fn borrowed_parse<F>(&'a self) -> Result<F, <F as FromBorrowedStr<'a>>::Err>
+    where
+        F: FromBorrowedStr<'a>;
+}
+
+impl<'a> BorrowedParse<'a> for str {
+    fn borrowed_parse<F>(&'a self) -> Result<F, <F as FromBorrowedStr<'a>>::Err>
+    where
+        F: FromBorrowedStr<'a>,
+    {
+        F::from_borrowed_str(self)
+    }
+}
+
+// impl<'a> BorrowedParse<'a> for String {
+//     fn borrowed_parse<F>(&'a self) -> Result<F, <F as FromBorrowedStr<'a>>::Err>
+//     where
+//         F: FromBorrowedStr<'a>,
+//     {
+//         F::from_borrowed_str(self.as_str())
+//     }
+// }
 
 /// A derpy meme that copies [`rusqlite::OptionalExtension`].
 pub trait Optional<T> {
@@ -695,5 +740,45 @@ mod tests {
         )?;
 
         Ok(())
+    }
+
+    #[cfg(feature = "serde")]
+    #[cfg(feature = "serde_json")]
+    #[test]
+    fn test_json() {
+        let data = [
+            (ValueRef::Text("some text"), "\"some text\""),
+            (ValueRef::Integer(123), "123"),
+            (ValueRef::Float(0.12), "0.12"),
+            (ValueRef::Boolean(true), "true"),
+            (
+                ValueRef::Uuid(
+                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<uuid::Uuid>()
+                        .unwrap(),
+                ),
+                "\"b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
+            ),
+            (
+                ValueRef::Entity(
+                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<Entity>()
+                        .unwrap(),
+                ),
+                "\"#b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
+            ),
+            (
+                ValueRef::Attribute(AttributeRef::from_str(":foo/bar").unwrap()),
+                "\":foo/bar\"",
+            ),
+        ];
+
+        for (value, json) in data.into_iter() {
+            let ser = serde_json::to_string(&value).unwrap();
+            assert_eq!(&ser, json);
+
+            let deser: Value = serde_json::from_str(&ser).unwrap();
+            assert_eq!(ValueRef::from(&deser), value);
+        }
     }
 }

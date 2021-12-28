@@ -3,11 +3,15 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use owoof::disperse::zip_with_keys;
-use owoof::driver::just;
-use owoof::network::TriplesField;
-use owoof::retrieve::{self, Pattern, Variable};
-use owoof::{either, sql::PushToQuery, AttributeRef, DontWoof, Ordering, Value, ValueRef};
+use owoof::{
+    disperse::zip_with_keys,
+    driver::just,
+    either,
+    network::TriplesField,
+    retrieve::{self, Pattern, Variable},
+    sql::PushToQuery,
+    AttributeRef, BorrowedParse, DontWoof, Ordering, Value, ValueRef,
+};
 
 use anyhow::Context;
 
@@ -410,7 +414,7 @@ where
         mode,
         patterns: patterns
             .into_iter()
-            .map(|s| s.try_into().map_err(anyhow::Error::from))
+            .map(|s| s.borrowed_parse().map_err(anyhow::Error::from))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(ArgError::invalid("<pattern>"))?,
         show: show
@@ -493,7 +497,10 @@ struct Show<'a> {
 fn parse_show<'a>(s: &'a str) -> anyhow::Result<Show<'a>> {
     let mut parts = s.split_whitespace();
     Ok(parts.next().unwrap_or_default())
-        .and_then(|s| Variable::try_from(s).with_context(|| format!("when reading {:?}", s)))
+        .and_then(|s| {
+            s.borrowed_parse::<Variable>()
+                .with_context(|| format!("when reading {:?}", s))
+        })
         .and_then(|variable| {
             parts
                 .map(|s| {

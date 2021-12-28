@@ -14,6 +14,9 @@ use std::borrow::Cow;
 
 use uuid::Uuid;
 
+#[cfg(feature = "serde_json")]
+use crate::FromBorrowedStr;
+
 /// A owning version of [`ValueRef`]
 #[cfg_attr(feature = "serde", derive(serde::Serialize), serde(untagged))]
 #[derive(Debug, Clone, PartialEq)]
@@ -176,58 +179,97 @@ impl<'a> From<&'_ ValueRef<'a>> for ValueRef<'a> {
     }
 }
 
-/// Figure out an appropriate [`Value`] variant from some text.
+/// Opposite of [`FromStr`] and [`FromBorrowedStr`].  Requires the `serde_json` feature.
 ///
-/// Tries to read it as an #entity :attribute number boolean uuid and if all those fail it just
-/// eats the whole input as a text value.  Uses [`FromStr`] so refer to that implementation on
-pub fn parse_value(s: &str) -> Value {
-    Option::<Value>::None
-        .or_else(|| s.parse::<Entity>().map(Value::from).ok())
-        .or_else(|| s.parse::<Attribute>().map(Value::from).ok())
-        .or_else(|| s.parse::<i64>().map(Value::from).ok())
-        .or_else(|| s.parse::<f64>().map(Value::from).ok())
-        .or_else(|| s.parse::<bool>().map(Value::from).ok())
-        .or_else(|| s.parse::<uuid::Uuid>().map(Value::from).ok())
-        .unwrap_or_else(|| Value::Text(s.to_owned()))
+/// Formatting rules are something like:
+/// - #entity-id
+/// - :some/attribute
+/// - "text is a json string"
+/// - some-hyphenated-uuid
+#[cfg(feature = "serde_json")]
+impl<'v> fmt::Display for ValueRef<'v> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use serde_json::to_string as json;
+
+        match self {
+            ValueRef::Entity(v) => v.fmt(f),
+            ValueRef::Attribute(v) => v.fmt(f),
+            ValueRef::Text(v) => json(v).map_err(|_| fmt::Error)?.fmt(f),
+            ValueRef::Integer(v) => v.fmt(f),
+            ValueRef::Float(v) => v.fmt(f),
+            ValueRef::Boolean(v) => v.fmt(f),
+            ValueRef::Uuid(v) => v.fmt(f),
+            ValueRef::Blob(v) => json(v).map_err(|_| fmt::Error)?.fmt(f),
+        }
+    }
 }
 
+/// See [`ValueRef`]'s [`fmt::Display`] implementation.
 #[cfg(feature = "serde_json")]
-/// Requires the `serde_json` feature.
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        ValueRef::from(self).fmt(f)
+    }
+}
+
+/// Opposite of [`fmt::Display`].  Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
+pub fn parse_value(s: &str) -> Result<Value, ()> {
+    use serde_json::from_str as json;
+
+    match s.chars().next().ok_or(())? {
+        '#' => s.parse::<Entity>().map_err(drop).map(Value::Entity),
+        ':' => s.parse::<Attribute>().map_err(drop).map(Value::Attribute),
+        '"' => json::<String>(s).map_err(drop).map(Value::Text),
+        '[' => json::<Vec<u8>>(s).map_err(drop).map(Value::Blob),
+        _ => Result::<Value, _>::Err(())
+            .or_else(|_| s.parse::<i64>().map(From::from))
+            .or_else(|_| s.parse::<f64>().map(From::from))
+            .or_else(|_| s.parse::<bool>().map(From::from))
+            .or_else(|_| s.parse::<uuid::Uuid>().map(From::from))
+            .map_err(drop),
+    }
+}
+
+/// Opposite of [`fmt::Display`].  Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
+pub fn parse_value_ref(s: &str) -> Result<ValueRef<'_>, ()> {
+    use serde_json::from_str as json;
+
+    match s.chars().next().ok_or(())? {
+        '#' => s.parse::<Entity>().map_err(drop).map(ValueRef::Entity),
+        ':' => AttributeRef::from_str(s)
+            .map_err(drop)
+            .map(ValueRef::Attribute),
+        '"' => json::<&str>(s).map_err(drop).map(ValueRef::Text),
+        _ => Result::<ValueRef, _>::Err(())
+            .or_else(|_| s.parse::<i64>().map(From::from))
+            .or_else(|_| s.parse::<f64>().map(From::from))
+            .or_else(|_| s.parse::<bool>().map(From::from))
+            .or_else(|_| s.parse::<uuid::Uuid>().map(From::from))
+            .map_err(drop),
+    }
+}
+
+/// Opposite of [`fmt::Display`].  Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
 impl FromStr for Value {
-    type Err = std::convert::Infallible;
+    type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(parse_value(s))
+        parse_value(s)
     }
 }
 
-impl TryFrom<&str> for Value {
-    type Error = ();
+/// Opposite of [`fmt::Display`].  Requires the `serde_json` feature.
+#[cfg(feature = "serde_json")]
+impl<'a> FromBorrowedStr<'a> for ValueRef<'a> {
+    type Err = ();
 
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        s.parse().map_err(|_| ())
+    fn from_borrowed_str(s: &'a str) -> Result<Self, Self::Err> {
+        parse_value_ref(s)
     }
 }
-
-// #[cfg(feature = "serde_json")]
-// /// Requires the `serde_json` feature.
-// impl<'a> TryFrom<&'a str> for ValueRef<'a> {
-//     type Error = ();
-//
-//     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-//         use serde_json::from_str as json;
-//
-//         Option::<ValueRef>::None
-//             .or_else(|| s.parse::<Entity>().map(ValueRef::from).ok())
-//             .or_else(|| AttributeRef::from_str(s).map(ValueRef::from).ok())
-//             .or_else(|| json::<&str>(s).map(ValueRef::Text).ok())
-//             .or_else(|| json::<i64>(s).map(ValueRef::from).ok())
-//             .or_else(|| json::<f64>(s).map(ValueRef::from).ok())
-//             .or_else(|| json::<bool>(s).map(ValueRef::from).ok())
-//             .or_else(|| s.parse::<uuid::Uuid>().map(ValueRef::from).ok())
-//             .ok_or(())
-//     }
-// }
 
 /// A uuid referring to an entity.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -506,8 +548,8 @@ pub mod _serde {
             #[derive(Deserialize)]
             #[serde(untagged)]
             enum Container<'a> {
-                Float(f64),
                 Integer(i64),
+                Float(f64),
                 Boolean(bool),
                 Text(Cow<'a, str>),
                 Bytes(Cow<'a, [u8]>),
@@ -515,8 +557,8 @@ pub mod _serde {
 
             let s: Container = Deserialize::deserialize(deserializer)?;
             Ok(match s {
-                Container::Float(f) => Value::from(f),
                 Container::Integer(i) => Value::from(i),
+                Container::Float(f) => Value::from(f),
                 Container::Boolean(b) => Value::from(b),
                 Container::Text(t) => Option::<Value>::None
                     .or_else(|| t.parse::<Entity>().map(Value::from).ok())
@@ -526,42 +568,6 @@ pub mod _serde {
                 Container::Bytes(b) => Value::Blob(b.into()),
             })
         }
-    }
-
-    #[feature("serde_json")]
-    #[test]
-    fn test_parsing() {
-        assert_eq!(
-            "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                .parse::<Value>()
-                .unwrap(),
-            "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                .parse::<uuid::Uuid>()
-                .map(Value::Uuid)
-                .unwrap(),
-        );
-        assert_eq!(
-            "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                .parse::<Value>()
-                .unwrap(),
-            "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                .parse::<Entity>()
-                .map(Value::Entity)
-                .unwrap(),
-        );
-        assert_eq!(
-            "\"db/id\"".parse::<Value>().unwrap(),
-            Value::Text("db/id".to_owned()),
-        );
-        assert_eq!(
-            ":db/id".parse::<Value>().unwrap(),
-            ":db/id".parse::<Attribute>().map(Value::Attribute).unwrap(),
-        );
-
-        // assert_eq!(
-        //     ValueRef::try_from("\"foo\"").unwrap(),
-        //     ValueRef::Text("foo"),
-        // );
     }
 }
 
@@ -590,5 +596,62 @@ mod tests {
         assert!("#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
             .parse::<Entity>()
             .is_ok());
+    }
+
+    #[cfg(feature = "serde_json")]
+    #[test]
+    fn test_parsing() {
+        use crate::BorrowedParse;
+
+        let data = [
+            (ValueRef::Integer(123), "123"),
+            (ValueRef::Float(0.12), "0.12"),
+            (ValueRef::Boolean(true), "true"),
+            (ValueRef::Text("hello world"), "\"hello world\""),
+            (
+                ValueRef::Uuid(
+                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<uuid::Uuid>()
+                        .unwrap(),
+                ),
+                "b3ddeb4c-a61f-4433-8acd-7e10117f142e",
+            ),
+            (
+                ValueRef::Entity(
+                    "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<Entity>()
+                        .unwrap(),
+                ),
+                "#b3ddeb4c-a61f-4433-8acd-7e10117f142e",
+            ),
+            (
+                ValueRef::Attribute(AttributeRef::from_str(":foo/bar").unwrap()),
+                ":foo/bar",
+            ),
+        ];
+
+        for (value, formatted) in data.into_iter() {
+            let displayed = value.to_string();
+            assert_eq!(displayed.as_str(), formatted, "{:?}", value);
+
+            let parsed: ValueRef = displayed.borrowed_parse().unwrap();
+            assert_eq!(parsed, value);
+        }
+
+        {
+            let blob = ValueRef::Blob("bytes".as_bytes());
+            let formatted = "[98,121,116,101,115]";
+            assert_eq!(blob.to_string(), formatted);
+            assert!(formatted.borrowed_parse::<ValueRef>().is_err());
+            assert_eq!(formatted.parse::<Value>().unwrap(), blob.into());
+        }
+
+        {
+            let blob = ValueRef::Text("needs \"escaping\"");
+            let formatted = r#""needs \"escaping\"""#;
+            assert_eq!(blob.to_string(), formatted);
+            assert!(formatted.borrowed_parse::<ValueRef>().is_err());
+            assert_eq!(formatted.parse::<Value>().unwrap(), blob.into());
+        }
     }
 }

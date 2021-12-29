@@ -42,7 +42,8 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
         .delimiter(args.csv_delimiter)
         .from_reader(input);
     let headers = reader.headers()?;
-    let mut to_positions = lookup_header_indices(headers, args.mappings.as_slice())?;
+    let mut to_positions: Vec<ToPosition> =
+        lookup_header_indices(headers, args.mappings.as_slice())?;
 
     if args.dry_run {
         eprintln!("the following mappings were planned");
@@ -66,8 +67,9 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
     )?;
     let woof = DontWoof::new(&mut db)?;
 
-    /* attribute identifiers -> attribute entities */
-    let attributes = find_or_assert_attributes(&woof, args.mappings.as_slice())?;
+    /* attribute identifiers -> attribute entities -- parallel sequence */
+    let attributes: Vec<owoof::Encoded<owoof::Entity>> =
+        find_or_assert_attributes(&woof, args.mappings.as_slice())?;
 
     let mut records_seen = 0usize;
     let mut limit = (0 != args.limit).then(|| args.limit);
@@ -99,12 +101,26 @@ fn do_import<'a>(args: Args<'a>) -> anyhow::Result<()> {
             woof.new_entity()?
         };
 
+        /* This could have been written differently to use the Deserialize implementation on
+         * owoof::Value if the csv crate API wasn't so awful.
+         *
+         * I can't ask it to deserialize a particular cell of a row -- like
+         * `StringRecord::get_deserialize()` or something -- so we'd have to use
+         * `StringRecord::deserialize` and deserialize the entire row.  But, since we only care
+         * about some cells and not others, we'd want to use a `serde::de::DeserializeSeed` to skip
+         * past the cells we don't care about.
+         *
+         * But, I don't think there's a way to use `DeserializeSeed` with the csv library because
+         * it doesn't expose an actual deserializer...
+         *
+         * Instead, we just have `value_from_csv_text` which basically just does both the csv
+         * library's deserializer.rs/infer_deserialize() and owoof::Value's Deserialize.  */
         to_positions
             .iter()
             .zip(attributes.iter().cloned())
             .map(|(to, a): (&ToPosition, _)| {
                 let text = record.get(to.position).context("no value")?;
-                let value: owoof::Value = todo!();
+                let value: owoof::Value = value_from_csv_text(text);
                 woof.encode(value)
                     .and_then(|v| woof.assert(e, a, v).map(drop))
                     .with_context(|| format!("failed to assert {:?}", text))
@@ -182,6 +198,19 @@ fn find_or_assert_attributes<'a>(
         })
         .collect::<Result<Vec<_>, _>>()
         .context("encode attribute")
+}
+
+/* Try parsing an #entity :attribute or a few other things and fall back to text otherwise. */
+fn value_from_csv_text(s: &str) -> owoof::Value {
+    use owoof::{Attribute, Entity, Value};
+    Option::<Value>::None
+        .or_else(|| s.parse::<Entity>().map(Value::from).ok())
+        .or_else(|| s.parse::<Attribute>().map(Value::from).ok())
+        .or_else(|| s.parse::<i64>().map(Value::from).ok())
+        .or_else(|| s.parse::<f64>().map(Value::from).ok())
+        .or_else(|| s.parse::<bool>().map(Value::from).ok())
+        .or_else(|| s.parse::<uuid::Uuid>().map(Value::from).ok())
+        .unwrap_or_else(|| Value::Text(s.to_owned()))
 }
 
 fn main() {

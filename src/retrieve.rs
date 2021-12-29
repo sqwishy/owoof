@@ -4,7 +4,7 @@
 //! in the network.
 //!
 //! [`NamedNetwork::add_pattern`] allows adding a constraint from a [`Pattern`] which can be
-//! parsed from a string. See [`types::parse_value`] on how parsing is attempted.
+//! parsed from a string. See [`crate::types::parse_value`] on how parsing is attempted.
 //!
 //! ```
 //! # use owoof::{NamedNetwork, Value, ValueRef, Attribute, Pattern, BorrowedParse};
@@ -241,7 +241,7 @@ pub enum NamesLookupError {
 /// all the same.
 ///
 /// Can be parsed but must borrow the input string because [`Variable`]s always borrow.  See
-/// [`BorrowedParse`] about that.  Also requires the `serde_json` feature to parse a [`Value`].
+/// [`crate::BorrowedParse`] about that.  Also requires the `serde_json` feature to parse a [`Value`].
 #[derive(Debug, PartialEq)]
 pub struct Pattern<'a, V> {
     pub entity: Either<Variable<'a>, V>,

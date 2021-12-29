@@ -123,6 +123,37 @@ $ owoof '?r :rating/score 1' \
 ]
 ```
 
+## Importing goodbooks-10k
+
+1. Initialize an empty database.
+   ```
+   $ owoof init
+   ```
+
+2. Import books & `--output` a copy of the data with the `:db/id` column for each
+   imported row.
+   ```
+   $ owoof-csv --output -- \
+        :book/title \
+        :book/authors \
+        :book/isbn \
+        :book/avg-rating\ average_rating \
+        < goodbooks-10k/books.csv \
+        > /tmp/imported-books
+   ```
+
+3. Import ratings, we're using `mlr` to join the ratings with the imported books.
+   ```
+   mlr --csv join \
+       -f /tmp/imported-books \
+       -j book_id \
+       < goodbooks-10k/ratings.csv \
+   | owoof-csv -- \
+       ':rating/book :db/id' \
+       ':rating/score rating' \
+       ':rating/user user_id'
+   ```
+
 ## TODO/Caveats
 
 - Testing is not extensive at this point.
@@ -144,12 +175,7 @@ $ owoof '?r :rating/score 1' \
   constraints over ranges or involving logical operations exist yet and honestly I
   haven't tested how well it will perform with the schema changes made in 0.2.
 
-- owoof-csv needs a way to remap ids, so instead `:rating/book` joining with `:book/id`
-  it joins to `:db/id`.
-
 ## Internal TODOs
-
-- Actually address the csv import id remap above.
 
 - Create DontWoof off the Connection.
 
@@ -161,6 +187,11 @@ $ owoof '?r :rating/score 1' \
   pragma optimize.
 
 - Maybe add some sort of update thing to shorthand retract & assert?
+
+- What happens if I retract :db/id.  It should be the way to delete an entity but it
+  should only work if the entity has no more triples.  But that probably isn't the case
+  unless the entities table is populated by the :db/id triple instead of from the soup
+  table.
 
 ## See Also
 

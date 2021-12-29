@@ -1,5 +1,10 @@
 //! Relating to types for entities, attributes, and other database values.
-
+//!
+//! If the `serde` feature is enabled, should be able to serialize and deserialize to a thing.  But
+//! it might not be very coherent.  [`Attribute`] and [`Entity`] instances are serialized to
+//! text with a leading symbol.  So, the serialized representation of `Value::Attribute(a)` is the
+//! same as `Value::Text(a.to_string())`.  So if you serialize the latter, you will deserialize
+//! into the former.
 use std::{
     borrow::{Borrow, ToOwned},
     convert::{AsRef, TryFrom},
@@ -653,5 +658,70 @@ mod tests {
             assert!(formatted.borrowed_parse::<ValueRef>().is_err());
             assert_eq!(formatted.parse::<Value>().unwrap(), blob.into());
         }
+    }
+
+    #[cfg(feature = "serde")]
+    #[cfg(feature = "serde_json")]
+    #[test]
+    fn test_json() {
+        let data = [
+            (ValueRef::Text("some text"), "\"some text\""),
+            (ValueRef::Integer(123), "123"),
+            (ValueRef::Float(0.12), "0.12"),
+            (ValueRef::Boolean(true), "true"),
+            (
+                ValueRef::Uuid(
+                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<uuid::Uuid>()
+                        .unwrap(),
+                ),
+                "\"b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
+            ),
+            (
+                ValueRef::Entity(
+                    "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                        .parse::<Entity>()
+                        .unwrap(),
+                ),
+                "\"#b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
+            ),
+            (
+                ValueRef::Attribute(AttributeRef::from_str(":foo/bar").unwrap()),
+                "\":foo/bar\"",
+            ),
+        ];
+
+        for (value, json) in data.into_iter() {
+            let ser = serde_json::to_string(&value).unwrap();
+            assert_eq!(&ser, json);
+
+            let deser: Value = serde_json::from_str(&ser).unwrap();
+            assert_eq!(ValueRef::from(&deser), value);
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[cfg(feature = "serde_json")]
+    #[test]
+    fn test_json_incoherence() {
+        /* We serialize Text but get an Attribute back */
+        let attribute_like_text = ValueRef::Text(":looks/like-an-attribute");
+        let json = serde_json::to_string(&attribute_like_text).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&json).unwrap(),
+            Value::from(Attribute::from_static(":looks/like-an-attribute"))
+        );
+
+        /* We serialize Text but get an Entity */
+        let entity_like_text = ValueRef::Text("#b3ddeb4c-a61f-4433-8acd-7e10117f142e");
+        let json = serde_json::to_string(&entity_like_text).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&json).unwrap(),
+            Value::Entity(
+                "#b3ddeb4c-a61f-4433-8acd-7e10117f142e"
+                    .parse::<Entity>()
+                    .unwrap()
+            ),
+        );
     }
 }

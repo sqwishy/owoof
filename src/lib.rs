@@ -741,44 +741,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[cfg(feature = "serde")]
-    #[cfg(feature = "serde_json")]
-    #[test]
-    fn test_json() {
-        let data = [
-            (ValueRef::Text("some text"), "\"some text\""),
-            (ValueRef::Integer(123), "123"),
-            (ValueRef::Float(0.12), "0.12"),
-            (ValueRef::Boolean(true), "true"),
-            (
-                ValueRef::Uuid(
-                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                        .parse::<uuid::Uuid>()
-                        .unwrap(),
-                ),
-                "\"b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
-            ),
-            (
-                ValueRef::Entity(
-                    "b3ddeb4c-a61f-4433-8acd-7e10117f142e"
-                        .parse::<Entity>()
-                        .unwrap(),
-                ),
-                "\"#b3ddeb4c-a61f-4433-8acd-7e10117f142e\"",
-            ),
-            (
-                ValueRef::Attribute(AttributeRef::from_str(":foo/bar").unwrap()),
-                "\":foo/bar\"",
-            ),
-        ];
-
-        for (value, json) in data.into_iter() {
-            let ser = serde_json::to_string(&value).unwrap();
-            assert_eq!(&ser, json);
-
-            let deser: Value = serde_json::from_str(&ser).unwrap();
-            assert_eq!(ValueRef::from(&deser), value);
-        }
-    }
 }

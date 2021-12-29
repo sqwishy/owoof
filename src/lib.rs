@@ -705,6 +705,7 @@ mod tests {
         let mut db = rusqlite_in_memory()?;
         let woof = DontWoof::new(&mut db)?;
 
+        let db_id = woof.attribute(woof.encode(AttributeRef::from_static(":db/id"))?)?;
         let db_attr = woof.attribute(woof.encode(AttributeRef::from_static(":db/attribute"))?)?;
 
         let pet_name = woof
@@ -722,6 +723,9 @@ mod tests {
             .assert(pet_name, woof.encode(ValueRef::from("Garfield"))?)?
             .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
             .into();
+
+        /* TODO XXX FIXME */
+        assert!(woof.retract(garfield, db_id, garfield).is_err());
 
         assert!(woof
             .retract(

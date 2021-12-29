@@ -9,6 +9,9 @@
 //! ```
 //! # use owoof::{NamedNetwork, Value, ValueRef, Attribute, Pattern, BorrowedParse};
 //! # use owoof::{Variable, either::{Left, Right}};
+//! #
+//! # #[cfg(feature = "serde_json")]
+//! # {
 //! let mut network = NamedNetwork::<ValueRef>::default();
 //! let pattern = r#"?p :pet/name "Garfield""#
 //!         .borrowed_parse()
@@ -22,6 +25,7 @@
 //!     }
 //! );
 //! network.add_pattern(&pattern);
+//! # }
 //! ```
 //!
 //! One nice thing about this is that variables are automatically unified.

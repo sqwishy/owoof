@@ -207,6 +207,13 @@ $ owoof '?r :rating/score 1' \
   unless the entities table is populated by the :db/id triple instead of from the soup
   table.
 
+  Retracting with the cli leaves the :db/id triplet there always... It's weird and
+  annoying that it has to be special-cased ...
+
+  I'd rather remove the :db/id triplet entirely.  It's useful for object forms or
+  mappings like `{":db/id": ...}` but maybe that should be different.  Really that form
+  is a group-by around the :db/id but why not group by something else?
+
 ## See Also
 
 My blog post associated with version 0.1 this software: https://froghat.ca/blag/dont-woof

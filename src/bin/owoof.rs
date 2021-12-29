@@ -1,5 +1,6 @@
 //! query, assert, or retract triplets
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -20,7 +21,6 @@ const OPEN_RW: rusqlite::OpenFlags =
 
 const OPEN_CREATE: rusqlite::OpenFlags = OPEN_RW.union(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
 
-// type Object = std::collections::BTreeMap<owoof::Attribute, owoof::Value>;
 #[derive(serde::Deserialize)]
 struct Object {
     #[serde(rename = ":db/id")]
@@ -203,7 +203,7 @@ fn do_init(init: Args) -> anyhow::Result<()> {
     let tx = db.transaction()?;
     owoof::create_schema(&tx)?;
     tx.commit()?;
-    eprintln!("{}", init.path.display());
+    println!("{}", init.path.display());
     Ok(())
 }
 
@@ -214,11 +214,10 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
     let woof = DontWoof::new(&mut db)?;
 
     /* TODO this error message is not helpful */
-    let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
-    // let stuff: Object = serde_json::from_reader(&mut input)?;
-    // let stuff: either::Either<Object, Vec<Object>> = either::left(stuff);
+    let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)
+        .context(r#"decode a JSON object like {":db/id": ..., ":foo/bar": ...}"#)?;
 
-    let mut ident_cache = std::collections::BTreeMap::default();
+    let mut ident_cache: IdentCache = Default::default();
 
     let asserted = match stuff {
         either::Left(one) => vec![one].into_iter(),
@@ -237,19 +236,7 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
         other
             .into_iter()
             .map(|(ident, v)| {
-                let a = match ident_cache.get(&ident).cloned() {
-                    Some(a) => a,
-                    None => {
-                        let encoded = woof.encode(&ident)?;
-                        let a = woof
-                            .attribute(encoded)
-                            .with_context(|| format!("attribute {}", &ident))?;
-                        if ident_cache.len() < 256 {
-                            ident_cache.insert(ident.clone(), a);
-                        }
-                        a
-                    }
-                };
+                let a = cached_get_ident(&mut ident_cache, &woof, &ident)?;
                 let v = woof.encode(v)?;
                 woof.assert(e, a, v)?;
                 Ok(())
@@ -268,7 +255,7 @@ fn do_assert(assert: Args) -> anyhow::Result<()> {
     }
     .context("serialize results")?;
 
-    eprintln!("{}", jaysons);
+    println!("{}", jaysons);
 
     Ok(())
 }
@@ -281,7 +268,7 @@ fn do_retract(retract: Args) -> anyhow::Result<()> {
 
     let stuff: either::Either<Object, Vec<Object>> = serde_json::from_reader(&mut input)?;
 
-    let mut ident_cache = std::collections::BTreeMap::default();
+    let mut ident_cache: IdentCache = Default::default();
 
     match stuff {
         either::Left(one) => vec![one].into_iter(),
@@ -295,19 +282,7 @@ fn do_retract(retract: Args) -> anyhow::Result<()> {
         other
             .into_iter()
             .map(|(ident, v)| {
-                let a = match ident_cache.get(&ident).cloned() {
-                    Some(a) => a,
-                    None => {
-                        let encoded = woof.encode(&ident)?;
-                        let a = woof
-                            .attribute(encoded)
-                            .with_context(|| format!("attribute {}", &ident))?;
-                        if ident_cache.len() < 256 {
-                            ident_cache.insert(ident.clone(), a);
-                        }
-                        a
-                    }
-                };
+                let a = cached_get_ident(&mut ident_cache, &woof, &ident)?;
                 let v = woof.encode(v)?;
                 woof.retract(e, a, v)?;
                 Ok(())
@@ -316,10 +291,32 @@ fn do_retract(retract: Args) -> anyhow::Result<()> {
     })
     .collect::<anyhow::Result<Sum>>()
     .and_then(|n: Sum| {
-        // woof.into_tx().commit().context("commit")?;
+        woof.into_tx().commit().context("commit")?;
         eprintln!("{}", n.usize());
         Ok(())
     })
+}
+
+type IdentCache = BTreeMap<owoof::Attribute, owoof::Encoded<owoof::Entity>>;
+
+fn cached_get_ident<'a>(
+    cache: &mut BTreeMap<owoof::Attribute, owoof::Encoded<owoof::Entity>>,
+    woof: &DontWoof,
+    ident: &AttributeRef,
+) -> anyhow::Result<owoof::Encoded<owoof::Entity>> {
+    match cache.get(ident).cloned() {
+        Some(a) => Ok(a),
+        None => {
+            let a = woof
+                .encode(ident)
+                .and_then(|enc| woof.attribute(enc))
+                .with_context(|| format!("couldn't find attribute {}, does it exist?", ident))?;
+            if cache.len() < 256 {
+                cache.insert(ident.to_owned(), a);
+            }
+            Ok(a)
+        }
+    }
 }
 
 fn usage_and_exit(exe: &str) -> ! {

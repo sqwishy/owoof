@@ -134,25 +134,39 @@ $ owoof '?r :rating/score 1' \
    imported row.
    ```
    $ owoof-csv --output -- \
-        :book/title \
-        :book/authors \
-        :book/isbn \
-        :book/avg-rating\ average_rating \
-        < goodbooks-10k/books.csv \
-        > /tmp/imported-books
+         :book/title \
+         :book/authors \
+         :book/isbn \
+         :book/avg-rating\ average_rating \
+         < goodbooks-10k/books.csv \
+         > /tmp/imported-books
    ```
 
 3. Import ratings, we're using `mlr` to join the ratings with the imported books.
    ```
-   mlr --csv join \
-       -f /tmp/imported-books \
-       -j book_id \
-       < goodbooks-10k/ratings.csv \
-   | owoof-csv -- \
-       ':rating/book :db/id' \
-       ':rating/score rating' \
-       ':rating/user user_id'
+   $ mlr --csv join \
+         -f /tmp/imported-books \
+         -j book_id \
+         < goodbooks-10k/ratings.csv \
+     | owoof-csv -- \
+         ':rating/book :db/id' \
+         ':rating/score rating' \
+         ':rating/user user_id'
    ```
+
+4. That takes some time (probably minutes) but then you can do something like.
+   ```
+   $ owoof '?calvin :book/title "The Complete Calvin and Hobbes"' \
+           '?rating :rating/book ?calvin' \
+           '?rating :rating/score 1' \
+           '?rating :rating/user ?u' \
+           '?more-great-takes :rating/user ?u' \
+           '?more-great-takes :rating/book ?b' \
+           '?more-great-takes :rating/score 5' \
+    --show '?b :book/title :book/avg-rating' \
+    --asc  '?b :book/avg-rating'
+   ```
+   And it should spit out some answers.
 
 ## TODO/Caveats
 

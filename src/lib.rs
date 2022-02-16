@@ -724,7 +724,6 @@ mod tests {
             .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
             .into();
 
-        /* TODO XXX FIXME */
         assert!(woof.retract(garfield, db_id, garfield).is_err());
 
         assert!(woof

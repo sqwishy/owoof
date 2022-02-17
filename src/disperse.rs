@@ -86,6 +86,12 @@ impl Query<&dyn ToSql> {
         let query = stmt.query_map(self.params(), |row| wat.from_start_of_row(&row))?;
         query.collect::<rusqlite::Result<Vec<_>>>()
     }
+
+    pub fn count<'tx>(&self, db: &DontWoof<'tx>) -> rusqlite::Result<usize> {
+        let mut stmt = db.prepare(self.as_str())?;
+        let query = stmt.query_map(self.params(), |_| Ok(()))?;
+        Ok(query.count())
+    }
 }
 
 /// Given a sequence of keys (like attributes) returns an implementation of [`FromSqlRow`] that

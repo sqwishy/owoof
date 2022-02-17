@@ -257,8 +257,11 @@ impl<'tx> DontWoof<'tx> {
     }
 
     pub fn fluent_entity(&self) -> Result<FluentEntity> {
-        let e = self.new_entity()?;
-        Ok(FluentEntity { woof: self, e })
+        self.new_entity().map(|e| self.fluent(e))
+    }
+
+    pub fn fluent(&self, e: Encoded<Entity>) -> FluentEntity {
+        FluentEntity { woof: self, e }
     }
 
     pub fn encode<V: TypeTag + ToSql>(&self, val: V) -> Result<Encoded<<V as TypeTag>::Factory>> {
@@ -552,6 +555,11 @@ impl FluentEntity<'_, '_> {
         self.woof.assert(self.e, a, v)?;
         Ok(self)
     }
+
+    pub fn retract<V: TypeTag>(&self, a: Encoded<Entity>, v: Encoded<V>) -> Result<&Self> {
+        self.woof.retract(self.e, a, v)?;
+        Ok(self)
+    }
 }
 
 impl From<&FluentEntity<'_, '_>> for Encoded<Entity> {
@@ -724,23 +732,46 @@ mod tests {
             .assert(animal_name, woof.encode(ValueRef::from("Cat"))?)?
             .into();
 
+        /* fails since garfield has a pet name and an animal name */
         assert!(woof.retract(garfield, db_id, garfield).is_err());
 
+        /* fails since garfield's :animal/name exists */
         assert!(woof
-            .retract(
-                animal_name,
-                db_attr,
-                woof.encode(":animal/name".parse::<Attribute>()?)?,
-            )
+            .fluent(animal_name)
+            .retract(db_attr, woof.encode(":animal/name".parse::<Attribute>()?)?)
             .is_err());
 
-        woof.retract(garfield, animal_name, woof.encode(ValueRef::from("Cat"))?)?;
+        use crate::traits::*;
 
-        woof.retract(
-            animal_name,
-            db_attr,
-            woof.encode(":animal/name".parse::<Attribute>()?)?,
-        )?;
+        let mut garfield_query = Network::<_>::default();
+
+        garfield_query.fluent_triples().link_entity(garfield);
+
+        let garfield_facts = garfield_query.select().to_query();
+
+        assert_eq!(3, garfield_facts.count(&woof).unwrap());
+
+        /* Retract garfield :pet/name.
+         * But :db/id fails because `garfield :animal/name "Cat"` still exists. */
+        assert!(woof
+            .fluent(garfield)
+            .retract(pet_name, woof.encode(ValueRef::from("Garfield"))?)?
+            .retract(db_id, garfield)
+            .is_err());
+
+        assert_eq!(2, garfield_facts.count(&woof).unwrap());
+
+        woof.fluent(garfield)
+            .retract(animal_name, woof.encode(ValueRef::from("Cat"))?)?
+            .retract(db_id, garfield)?;
+
+        assert_eq!(0, garfield_facts.count(&woof).unwrap());
+
+        /* Now we can remove :animal/name.
+         * Technically, `animal_name :db/id animal_name` still exists but it's not an attribute
+         * anymore because it has no identifier. */
+        woof.fluent(animal_name)
+            .retract(db_attr, woof.encode(":animal/name".parse::<Attribute>()?)?)?;
 
         Ok(())
     }

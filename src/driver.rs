@@ -235,6 +235,15 @@ pub trait FromSqlRow {
     }
 }
 
+/// You might want [`Query<&dyn ToSql>::count`] instead?
+impl FromSqlRow for () {
+    type Out = ();
+
+    fn from_sql_row(&mut self, _row: &Row, _idx: &mut ColumnIndex) -> Result<Self::Out> {
+        Ok(())
+    }
+}
+
 impl<T> FromSqlRow for &mut [T]
 where
     T: FromSqlRow,

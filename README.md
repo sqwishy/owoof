@@ -26,7 +26,7 @@ query information.
 
 Here are some examples:
 
-```json
+```shell
 $ echo '[{":db/attribute": ":pet/name"},
          {":pet/name": "Garfield"},
          {":pet/name": "Odie"},
@@ -88,11 +88,21 @@ $ owoof '?person :person/starship "USS Enterprise (NCC-1701-D)"' \
   "Spot"
 ]
 
+# Or, suppose you know someone's name and their pet's name but don't know the attribute
+# that relates them...  (But also this doesn't use indexes well so don't do it.)
+
+$ owoof '?person :person/name "Lieutenant Commander Data"' \
+        '?pet ?owner ?person' \
+        '?pet :pet/name "Spot"' \
+ --show '?owner :db/attribute'
+[
+  { ":db/attribute": ":pet/owner" }
+]
 ```
 
 Imported from the [goodbooks-10k](https://github.com/zygmuntz/goodbooks-10k) dataset.
 
-```json
+```shell
 $ owoof '?r :rating/score 1' \
         '?r :rating/book ?b' \
         '?b :book/authors "Dan Brown"' \
@@ -126,13 +136,13 @@ $ owoof '?r :rating/score 1' \
 ## Importing goodbooks-10k
 
 1. Initialize an empty database.
-   ```
+   ```shell
    $ owoof init
    ```
 
 2. Import books & `--output` a copy of the data with the `:db/id` column for each
    imported row.
-   ```
+   ```shell
    $ owoof-csv --output -- \
          :book/title \
          :book/authors \
@@ -143,7 +153,7 @@ $ owoof '?r :rating/score 1' \
    ```
 
 3. Import ratings, we're using `mlr` to join the ratings with the imported books.
-   ```
+   ```shell
    $ mlr --csv join \
          -f /tmp/imported-books \
          -j book_id \
@@ -155,7 +165,7 @@ $ owoof '?r :rating/score 1' \
    ```
 
 4. That takes some time (probably minutes) but then you can do something like.
-   ```
+   ```shell
    $ owoof '?calvin :book/title "The Complete Calvin and Hobbes"' \
            '?rating :rating/book ?calvin' \
            '?rating :rating/score 1' \
@@ -202,17 +212,12 @@ $ owoof '?r :rating/score 1' \
 
 - Maybe add some sort of update thing to shorthand retract & assert?
 
-- What happens if I retract :db/id.  It should be the way to delete an entity but it
-  should only work if the entity has no more triples.  But that probably isn't the case
-  unless the entities table is populated by the :db/id triple instead of from the soup
-  table.
+- The `:db/id` attribute is kind of silly since the entity and value are the same for
+  triplets of that attribute.
 
-  Retracting with the cli leaves the :db/id triplet there always... It's weird and
-  annoying that it has to be special-cased ...
-
-  I'd rather remove the :db/id triplet entirely.  It's useful for object forms or
-  mappings like `{":db/id": ...}` but maybe that should be different.  Really that form
-  is a group-by around the :db/id but why not group by something else?
+  It's useful for object forms / mappings; like `{":db/id": ...}`.  But maybe there is a
+  more clever way to group by something?  (Like some sort of primary key associated with
+  every form that the database stores ... 🤔)
 
 ## See Also
 
